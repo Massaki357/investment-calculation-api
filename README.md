@@ -11,8 +11,9 @@ It is consumed by JARVIS (the main AI system) over HTTP/REST. This service:
 - does **not** issue buy/sell/hold recommendations or opinions;
 - does **not** access JARVIS's code, database or API.
 
-> **Status:** Phase 6 complete — API foundation, Fundamental Analysis (59 endpoints),
-> Valuation (21), Fixed Income (21), Risk (24), Statistics (14) and Portfolio (17).
+> **Status:** Phase 7 complete — API foundation, Fundamental Analysis (59 endpoints),
+> Valuation (21), Fixed Income (21), Risk (24), Statistics (14), Portfolio (17) and
+> Technical Analysis (16).
 > See [Roadmap](#roadmap).
 
 ---
@@ -729,6 +730,67 @@ curl -X POST http://localhost:8000/api/v1/portfolio/maximum-sharpe \
 | `POST /api/v1/portfolio/risk-parity` | Risk Parity Portfolio | `min ½ yᵀΣy − (1/N) Σ ln y_i, y > 0;  w = y / Σ y` | structured |
 | `POST /api/v1/portfolio/inverse-volatility` | Inverse Volatility Portfolio | `w_i = (1 / σ_i) / Σ_j (1 / σ_j)` | structured |
 
+### Technical Analysis
+
+Input conventions specific to this domain:
+
+- Series are chronological (oldest first). Prices must be > 0; volumes ≥ 0; `high`, `low`,
+  `close` must have the same length with `low ≤ close ≤ high`.
+- **Every output series has the same length as the input**; values are `null` during warm-up
+  and where the indicator is undefined (zero range, zero volume). `latest` repeats the last value.
+- EMA (and the EMAs inside MACD) are seeded with the SMA of the first N values, α = 2/(N+1).
+  RSI and ATR use Wilder smoothing (α = 1/N) seeded with a simple average.
+- Bollinger Bands use the population standard deviation; historical volatility uses the sample
+  standard deviation of log returns, annualized with `periods_per_year` (252).
+- RSI, Stochastic, Williams %R, MFI and CCI keep their conventional scales; ROC and historical
+  volatility are decimals.
+- RSI/MFI: no losses in the window gives 100; no movement gives 50.
+- VWAP is cumulative over the series sent (no session reset). Send `prices`, or `high`/`low`/
+  `close` to use the typical price.
+- Too few observations for the requested period returns `400 INSUFFICIENT_DATA`.
+- Default periods: SMA/EMA/WMA/VWMA 20, RSI 14, MACD 12/26/9, ROC 12, Stochastic 14/3,
+  Williams %R 14, CCI 20, ATR 14, Bollinger 20 × 2σ, historical volatility 20, MFI 14.
+
+RSI example:
+
+```bash
+curl -X POST http://localhost:8000/api/v1/technical/rsi \
+  -H "Content-Type: application/json" \
+  -d '{"prices": [44.34, 44.09, 44.15, 43.61, 44.33, 44.83, 45.10, 45.42, 45.84, 46.08,
+                  45.89, 46.03, 45.61, 46.28, 46.28, 46.00, 46.03, 46.41, 46.22, 45.64],
+       "period": 14}'
+```
+
+```json
+{
+  "metric": "RSI",
+  "parameters": {"period": 14},
+  "values": [null, null, null, null, null, null, null, null, null, null, null, null, null, null,
+             70.46413502109705, 66.24961855355505, 66.48094183471265, 69.34685316290866,
+             66.29471265892624, 57.91502067008555],
+  "latest": 57.91502067008555
+}
+```
+
+| Endpoint | Indicator | Formula | Output |
+|---|---|---|---|
+| `POST /api/v1/technical/sma` | SMA | `SMA_t = (P_(t−N+1) + … + P_t) / N` | indicator |
+| `POST /api/v1/technical/ema` | EMA | `EMA_t = α × P_t + (1 − α) × EMA_(t−1), α = 2 / (N + 1)` | indicator |
+| `POST /api/v1/technical/wma` | WMA | `WMA_t = Σ_(i=1..N) i × P_(t−N+i) / (N (N + 1) / 2)` | indicator |
+| `POST /api/v1/technical/vwma` | VWMA | `VWMA_t = Σ (P × V) / Σ V over the last N periods` | indicator |
+| `POST /api/v1/technical/rsi` | RSI | `RSI = 100 − 100 / (1 + avg_gain / avg_loss)` | indicator |
+| `POST /api/v1/technical/macd` | MACD | `signal = EMA_signal(MACD), histogram = MACD − signal` | macd |
+| `POST /api/v1/technical/roc` | ROC | `ROC_t = P_t / P_(t−N) − 1` | indicator |
+| `POST /api/v1/technical/stochastic` | Stochastic Oscillator | `%D = SMA_d(%K)` | stochastic |
+| `POST /api/v1/technical/williams-r` | Williams %R | `%R = −100 × (highest high_N − C_t) / (highest high_N − lowest low_N)` | indicator |
+| `POST /api/v1/technical/cci` | CCI | `CCI = (TP − SMA_N(TP)) / (0.015 × mean absolute deviation_N(TP))` | indicator |
+| `POST /api/v1/technical/atr` | ATR | `ATR_N = mean(TR_1..TR_N); ATR_t = (ATR_(t−1) × (N − 1) + TR_t) / N` | indicator |
+| `POST /api/v1/technical/bollinger-bands` | Bollinger Bands | `%B = (P − lower) / (upper − lower); bandwidth = (upper − lower) / middle` | bollinger |
+| `POST /api/v1/technical/historical-volatility` | Historical Volatility | `HV_t = σ(ln(P_i / P_(i−1)), last N returns) × √periods_per_year` | indicator |
+| `POST /api/v1/technical/obv` | OBV | `OBV_0 = 0; OBV_t = OBV_(t−1) ± V_t when C_t is above / below C_(t−1)` | indicator |
+| `POST /api/v1/technical/vwap` | VWAP | `with high/low/close: P = (H + L + C) / 3` | indicator |
+| `POST /api/v1/technical/money-flow-index` | Money Flow Index | `MFI = 100 − 100 / (1 + Σ positive flow_N / Σ negative flow_N)` | indicator |
+
 ---
 
 ## Conventions
@@ -836,7 +898,7 @@ successor of `httpx` required by Starlette 1.x.
 | 4 | Fixed Income (21 endpoints) | ✅ |
 | 5 | Risk + Statistics (38 endpoints) | ✅ |
 | 6 | Portfolio (17 endpoints) | ✅ |
-| 7 | Technical Analysis | pending |
+| 7 | Technical Analysis (16 endpoints) | ✅ |
 | 8 | Scenarios + Monte Carlo | pending |
 
 ## Limitations

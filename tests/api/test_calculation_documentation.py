@@ -8,7 +8,15 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-from app.api.v1.routes import fixed_income, fundamentals, portfolio, risk, statistics, valuation
+from app.api.v1.routes import (
+    fixed_income,
+    fundamentals,
+    portfolio,
+    risk,
+    statistics,
+    technical,
+    valuation,
+)
 
 DOMAINS = {
     "/api/v1/fundamentals": fundamentals,
@@ -17,6 +25,7 @@ DOMAINS = {
     "/api/v1/risk": risk,
     "/api/v1/statistics": statistics,
     "/api/v1/portfolio": portfolio,
+    "/api/v1/technical": technical,
 }
 
 ENDPOINT_PATHS = sorted(
