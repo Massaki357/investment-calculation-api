@@ -3,7 +3,7 @@ from typing import Annotated, Self
 
 from pydantic import Field, model_validator
 
-from app.schemas.common import MetricResponse, MetricValue
+from app.schemas.common import MetricBreakdownResponse
 from app.schemas.fields import Beta, RateDecimal, TaxRate
 from app.schemas.validators import require_exactly_one, require_fields
 from app.schemas.valuation.common import ValuationRequest
@@ -91,7 +91,5 @@ class WaccRequest(ValuationRequest):
     tax_rate: TaxRate
 
 
-class WaccResponse(MetricResponse):
-    components: list[MetricValue] = Field(
-        description="Capital weights and component costs used in the calculation."
-    )
+class WaccResponse(MetricBreakdownResponse):
+    """WACC with capital weights and component costs."""

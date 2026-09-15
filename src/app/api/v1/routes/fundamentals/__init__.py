@@ -19,3 +19,4 @@ for _group in _GROUPS:
     router.include_router(_group.router)
 
 METRIC_ENDPOINTS = tuple(endpoint for group in _GROUPS for endpoint in group.ENDPOINTS)
+CALCULATION_ENDPOINTS = profitability.CALCULATION_ENDPOINTS

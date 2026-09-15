@@ -522,50 +522,6 @@ def test_invalid_case(client: TestClient, path: str) -> None:
     assert response.json()["error"]["code"] == code
 
 
-@pytest.mark.parametrize("path", PATHS)
-def test_empty_body_is_rejected(client: TestClient, path: str) -> None:
-    response = client.post(BASE + path, json={})
-
-    assert response.status_code == 422
-    assert response.json()["error"]["code"] == "VALIDATION_ERROR"
-
-
-@pytest.mark.parametrize("path", PATHS)
-def test_unknown_field_is_rejected(client: TestClient, path: str) -> None:
-    payload = {**CASES[path].normal[0], "unexpected_field": 1}
-
-    response = client.post(BASE + path, json=payload)
-
-    assert response.status_code == 422
-
-
-@pytest.mark.parametrize("path", PATHS)
-def test_documented_example_matches_live_response(
-    client: TestClient, openapi: dict[str, Any], path: str
-) -> None:
-    operation = openapi["paths"][BASE + path]["post"]
-    example_request = operation["requestBody"]["content"]["application/json"]["examples"][
-        "example"
-    ]["value"]
-    example_response = operation["responses"]["200"]["content"]["application/json"]["examples"][
-        "example"
-    ]["value"]
-
-    live = client.post(BASE + path, json=example_request).json()
-
-    assert live["value"] == example_response["value"]
-    assert live["metric"] == example_response["metric"]
-
-
-@pytest.mark.parametrize("path", PATHS)
-def test_openapi_documents_formula_unit_and_errors(openapi: dict[str, Any], path: str) -> None:
-    operation = openapi["paths"][BASE + path]["post"]
-
-    assert "**Formula:**" in operation["description"]
-    assert "**Unit:**" in operation["description"]
-    assert {"200", "400", "422", "500"} <= set(operation["responses"])
-
-
 def test_currency_is_echoed_only_for_amount_results(client: TestClient) -> None:
     amount = client.post(
         BASE + "/net-debt",

@@ -11,8 +11,8 @@ It is consumed by JARVIS (the main AI system) over HTTP/REST. This service:
 - does **not** issue buy/sell/hold recommendations or opinions;
 - does **not** access JARVIS's code, database or API.
 
-> **Status:** Phase 3 complete — API foundation, Fundamental Analysis (59 endpoints) and
-> Valuation (21 endpoints).
+> **Status:** Phase 4 complete — API foundation, Fundamental Analysis (59 endpoints),
+> Valuation (21 endpoints) and Fixed Income (21 endpoints).
 > See [Roadmap](#roadmap).
 
 ---
@@ -74,7 +74,9 @@ Design rules:
    are generated, and every example is executed at import time so documentation cannot drift
    from the code.
 4. Add unit tests for the formula and a normal/edge/invalid case to the API test table — a guard
-   test fails if an endpoint has no cases.
+   test fails if an endpoint has no cases. `tests/api/test_calculation_documentation.py`
+   checks every registered endpoint (docs, live examples, unknown fields, empty body); add new
+   domains to its `DOMAINS` map.
 
 Shared, documented field types live in `schemas/fields.py`.
 
@@ -447,6 +449,98 @@ curl -X POST http://localhost:8000/api/v1/valuation/wacc \
 | `POST /api/v1/valuation/after-tax-cost-of-debt` | After-tax Cost of Debt | `Kd after tax = pre_tax_cost_of_debt × (1 − tax_rate)` | `decimal` |
 | `POST /api/v1/valuation/wacc` | WACC | `WACC = E / (D + E) × cost_of_equity + D / (D + E) × pre_tax_cost_of_debt × (1 − tax_rate)` | structured |
 
+### Fixed Income
+
+Input conventions specific to this domain:
+
+- `rate`, `nominal_rate`, yields and coupon rates are **annual decimals**. `compounding` is
+  `simple`, `periodic` (default, with `compounding_frequency`) or `continuous`.
+- **Bond yields are bond-equivalent**: annual yield compounded at `coupon_frequency`
+  (periodic yield = yield / frequency). YTM/YTC also return the periodic and effective annual yield.
+- **Bonds are priced on coupon dates** (v1 limitation): `years × coupon_frequency` must be a whole
+  number; there is no accrued interest, settlement date or day-count convention.
+- Rate conversion uses compound equivalence; `business_day` uses 252 business days per year by
+  default, `day` uses 365 (or 360).
+- Spot and forward rates are **effective annual** rates. Bootstrapping needs exactly one bond per
+  coupon date.
+- YTM, YTC and IRR are solved with Brent's method. IRR with more than one real solution returns
+  `400 INVALID_INPUT` with `details.irr_candidates` instead of picking one.
+- `/spread` and `/credit-spread` are yield spreads (not Z-spread or OAS); multiply by 10,000 for
+  basis points.
+
+YTM example:
+
+```bash
+curl -X POST http://localhost:8000/api/v1/fixed-income/ytm \
+  -H "Content-Type: application/json" \
+  -d '{"face_value": 1000, "coupon_rate": 0.06, "years_to_maturity": 5,
+       "coupon_frequency": 2, "price": 918.8910422064494}'
+```
+
+```json
+{
+  "metric": "Yield to Maturity", "value": 0.08000000000000008, "unit": "decimal", "currency": null,
+  "components": [
+    {"metric": "Periodic Yield", "value": 0.04000000000000004, "unit": "decimal"},
+    {"metric": "Effective Annual Yield", "value": 0.08160000000000012, "unit": "decimal"}
+  ]
+}
+```
+
+Ambiguous IRR:
+
+```bash
+curl -X POST http://localhost:8000/api/v1/fixed-income/irr \
+  -H "Content-Type: application/json" \
+  -d '{"cash_flows": [-100, 230, -132]}'
+```
+
+```json
+{
+  "error": {
+    "code": "INVALID_INPUT",
+    "message": "these cash flows have multiple internal rates of return; IRR is ambiguous",
+    "details": {"irr_candidates": [0.09999999999999942, 0.20000000000000062]}
+  }
+}
+```
+
+##### Interest and rates
+
+| Endpoint | Result | Formula | Unit |
+|---|---|---|---|
+| `POST /api/v1/fixed-income/future-value` | Future Value | `FV = present_value × growth_factor(compounding, rate, years)` | `amount` |
+| `POST /api/v1/fixed-income/present-value` | Present Value | `PV = future_value / growth_factor(compounding, rate, years)` | `amount` |
+| `POST /api/v1/fixed-income/nominal-rate` | Nominal Annual Rate | `nominal = m × [(1 + effective_rate)^(1/m) − 1]` | `decimal` |
+| `POST /api/v1/fixed-income/effective-rate` | Effective Annual Rate | `periodic: (1 + nominal / m)^m − 1 · continuous: e^nominal − 1` | `decimal` |
+| `POST /api/v1/fixed-income/real-rate` | Real Rate | `exact: (1 + nominal_rate) / (1 + inflation_rate) − 1 · approximate: nominal_rate − inflation_rate` | `decimal` |
+| `POST /api/v1/fixed-income/rate-conversion` | Equivalent Rate | `rate_to = (1 + rate)^(to_period_years / from_period_years) − 1` | `decimal` |
+| `POST /api/v1/fixed-income/simple-interest` | Simple Interest | `interest = principal × rate × years` | structured |
+| `POST /api/v1/fixed-income/compound-interest` | Compound Interest | `periodic: FV = principal × (1 + rate / m)^(m × years)` | structured |
+
+##### Bonds
+
+| Endpoint | Result | Formula | Unit |
+|---|---|---|---|
+| `POST /api/v1/fixed-income/current-yield` | Current Yield | `Current Yield = face_value × coupon_rate / price` | `decimal` |
+| `POST /api/v1/fixed-income/macaulay-duration` | Macaulay Duration | `D_mac = Σ t_k × PV(CF_k) / price, t_k = k / coupon_frequency` | `years` |
+| `POST /api/v1/fixed-income/modified-duration` | Modified Duration | `D_mod = D_mac / (1 + yield_to_maturity / coupon_frequency)` | `years` |
+| `POST /api/v1/fixed-income/convexity` | Convexity | `C = Σ PV(CF_k) × (t_k² + t_k / m) / [price × (1 + y/m)²]` | `number` |
+| `POST /api/v1/fixed-income/spread` | Yield Spread | `Spread = bond_yield − benchmark_yield` | `decimal` |
+| `POST /api/v1/fixed-income/bond-price` | Bond Price | `Price = Σ C / (1 + y/m)^k + face_value / (1 + y/m)^n, k = 1..n` | structured |
+| `POST /api/v1/fixed-income/ytm` | Yield to Maturity | `Solve y: price = Σ C / (1 + y/m)^k + face_value / (1 + y/m)^n` | structured |
+| `POST /api/v1/fixed-income/ytc` | Yield to Call | `Solve y: price = Σ C / (1 + y/m)^k + call_price / (1 + y/m)^n_call` | structured |
+| `POST /api/v1/fixed-income/duration` | Duration and Convexity | `D_mac = Σ t_k × PV(CF_k) / price` | structured |
+| `POST /api/v1/fixed-income/credit-spread` | Credit Spread | `Credit Spread = YTM(bond price) − risk_free_yield` | structured |
+
+##### Yield curve and cash flows
+
+| Endpoint | Result | Formula | Unit |
+|---|---|---|---|
+| `POST /api/v1/fixed-income/forward-rate` | Forward Rate | `f = [(1 + long_spot_rate)^long_maturity / (1 + short_spot_rate)^short_maturity]^(1 / (long_maturity − short_maturity)) − 1` | `decimal` |
+| `POST /api/v1/fixed-income/spot-rates` | Spot Curve | `d_k = (price_k − c_k × Σ_{j<k} d_j) / (c_k + face_value_k)` | structured |
+| `POST /api/v1/fixed-income/irr` | IRR | `Solve r: Σ CF_t / (1 + r)^t = 0, t = 0..n` | structured |
+
 ---
 
 ## Conventions
@@ -551,7 +645,7 @@ successor of `httpx` required by Starlette 1.x.
 | 1 | API foundation: config, health, errors, logging, schemas, Docker, tests | ✅ |
 | 2 | Fundamental Analysis (59 endpoints) | ✅ |
 | 3 | Valuation (21 endpoints) | ✅ |
-| 4 | Fixed Income | pending |
+| 4 | Fixed Income (21 endpoints) | ✅ |
 | 5 | Risk + Statistics | pending |
 | 6 | Portfolio | pending |
 | 7 | Technical Analysis | pending |
@@ -559,6 +653,8 @@ successor of `httpx` required by Starlette 1.x.
 
 ## Limitations
 
+- Bonds are priced on coupon dates only: no accrued interest, settlement dates or day counts.
+- IRR assumes equally spaced periods; ambiguous IRRs (several real roots) are rejected.
 - float64 arithmetic (no `Decimal`): suitable for analytics, not for accounting ledgers.
 - No market data, no persistence, no recommendations — by design.
 - Authentication is a single optional shared API key; no users, roles or rate limiting yet.

@@ -197,7 +197,7 @@ def _dupont(payload: DuPontRequest) -> DuPontResponse:
     return DuPontResponse(method=payload.method, return_on_equity=roe, components=components)
 
 
-STRUCTURED_ENDPOINTS = (
+CALCULATION_ENDPOINTS = (
     CalculationEndpoint(
         path="/dupont",
         title="DuPont Analysis",
@@ -238,4 +238,4 @@ STRUCTURED_ENDPOINTS = (
     ),
 )
 
-add_calculation_endpoints(router, STRUCTURED_ENDPOINTS)
+add_calculation_endpoints(router, CALCULATION_ENDPOINTS)

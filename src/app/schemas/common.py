@@ -65,6 +65,14 @@ class MetricResponse(MetricValue):
     )
 
 
+class MetricBreakdownResponse(MetricResponse):
+    """Headline metric plus the intermediate values used to compute it."""
+
+    components: list[MetricValue] = Field(
+        description="Intermediate values and inputs that explain the headline value."
+    )
+
+
 class HealthResponse(BaseModel):
     status: Literal["healthy"] = "healthy"
 

@@ -175,11 +175,6 @@ def test_invalid_case(client: TestClient, path: str) -> None:
     assert response.json()["error"]["code"] == code
 
 
-@pytest.mark.parametrize("path", PATHS)
-def test_empty_body_is_rejected(client: TestClient, path: str) -> None:
-    assert client.post(BASE + path, json={}).status_code == 422
-
-
 def test_gordon_rejects_both_dividend_inputs(client: TestClient) -> None:
     response = client.post(
         BASE + "/gordon-growth",
