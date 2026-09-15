@@ -13,6 +13,7 @@ from app.api.v1.routes import (
     fundamentals,
     portfolio,
     risk,
+    scenarios,
     statistics,
     technical,
     valuation,
@@ -26,6 +27,7 @@ DOMAINS = {
     "/api/v1/statistics": statistics,
     "/api/v1/portfolio": portfolio,
     "/api/v1/technical": technical,
+    "/api/v1/scenarios": scenarios,
 }
 
 ENDPOINT_PATHS = sorted(
@@ -46,7 +48,9 @@ def _without_nulls(value: Any) -> Any:
 
 def test_every_registered_endpoint_is_published(openapi: dict[str, Any]) -> None:
     published = {
-        path for path in openapi["paths"] if path.startswith(tuple(DOMAINS)) and path != "/health"
+        path
+        for path, operations in openapi["paths"].items()
+        if path.startswith(tuple(DOMAINS)) and "post" in operations
     }
     assert published == set(ENDPOINT_PATHS)
 

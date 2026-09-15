@@ -1,5 +1,8 @@
 """Application settings loaded exclusively from environment variables (or a local .env file)."""
 
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from enum import StrEnum
 from functools import lru_cache
 from typing import Annotated, Any
@@ -80,3 +83,21 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
+
+
+# Settings of the application serving the current request (set by the endpoint handler), so
+# calculations can read configured limits without depending on FastAPI.
+_active_settings: ContextVar[Settings | None] = ContextVar("active_settings", default=None)
+
+
+def current_settings() -> Settings:
+    return _active_settings.get() or get_settings()
+
+
+@contextmanager
+def use_settings(settings: Settings) -> Iterator[None]:
+    token = _active_settings.set(settings)
+    try:
+        yield
+    finally:
+        _active_settings.reset(token)

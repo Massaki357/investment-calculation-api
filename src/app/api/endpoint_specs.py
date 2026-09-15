@@ -18,7 +18,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Body, Request
 from pydantic import BaseModel
 
-from app.core.config import Settings
+from app.core.config import Settings, use_settings
 from app.core.exceptions import NonFiniteResultError
 from app.schemas.common import BaseRequest, MetricResponse, Unit, error_responses
 from app.utils.validation import ensure_finite, ensure_max_length
@@ -204,7 +204,8 @@ def _register(
     def handler(request: Request, payload: BaseRequest) -> BaseModel:
         settings: Settings = request.app.state.settings
         enforce_series_limit(payload, settings.max_series_length)
-        return build_response(payload)
+        with use_settings(settings):
+            return build_response(payload)
 
     body = Body(
         openapi_examples={

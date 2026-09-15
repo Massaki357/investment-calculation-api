@@ -11,9 +11,9 @@ It is consumed by JARVIS (the main AI system) over HTTP/REST. This service:
 - does **not** issue buy/sell/hold recommendations or opinions;
 - does **not** access JARVIS's code, database or API.
 
-> **Status:** Phase 7 complete — API foundation, Fundamental Analysis (59 endpoints),
-> Valuation (21), Fixed Income (21), Risk (24), Statistics (14), Portfolio (17) and
-> Technical Analysis (16).
+> **Status:** all 8 phases complete — 176 calculation endpoints: Fundamental Analysis (59),
+> Valuation (21), Fixed Income (21), Risk (24), Statistics (14), Portfolio (17),
+> Technical Analysis (16) and Scenarios (4).
 > See [Roadmap](#roadmap).
 
 ---
@@ -791,6 +791,75 @@ curl -X POST http://localhost:8000/api/v1/technical/rsi \
 | `POST /api/v1/technical/vwap` | VWAP | `with high/low/close: P = (H + L + C) / 3` | indicator |
 | `POST /api/v1/technical/money-flow-index` | Money Flow Index | `MFI = 100 − 100 / (1 + Σ positive flow_N / Σ negative flow_N)` | indicator |
 
+### Scenarios and Monte Carlo
+
+- **No formulas or code are accepted.** Sensitivity and scenario analysis re-run calculations that
+  are already registered in the API, identified by `model` (e.g. `valuation/dcf/fcff`, see
+  `GET /api/v1/scenarios/models`). `base_inputs` is the same request body as the original
+  endpoint; variables and overrides use dotted paths (`terminal.growth_rate`). `output` is a
+  dotted path to a numeric field of that endpoint's response (`value`, `enterprise_value`,
+  `components.0.value`).
+- Combinations that are invalid for the model return a `null` output with an error code instead
+  of failing the whole request; invalid `base_inputs` return `400`. Grids are limited to 2,500
+  points.
+- Scenario analysis covers **bear / base / bull** cases (any names): optional probabilities must be
+  given for all scenarios and sum to 1; `difference_from_base` uses the scenario named `base`.
+- Stress testing is linear: `shock return = Σ sensitivity × factor shock`,
+  `P&L = exposure × shock return`. A position without sensitivities moves one-for-one with the
+  shock named like it; factors missing from a scenario have zero shock.
+- Monte Carlo simulates geometric Brownian motion with annual `expected_return` (μ) and
+  `volatility` (σ), Δt = 1/`periods_per_year`. **The same `seed` reproduces the same result**;
+  without a seed one is generated and returned in `seed_used`. `simulations × periods` is limited
+  by `MAX_MONTE_CARLO_CELLS`. Results are summaries (percentiles, VaR/ES versus the initial value,
+  probability of loss, per-path max drawdown, theoretical mean/median); up to 10 `sample_paths`
+  can be returned for charts.
+
+Monte Carlo example (the one from the specification):
+
+```bash
+curl -X POST http://localhost:8000/api/v1/scenarios/monte-carlo \
+  -H "Content-Type: application/json" \
+  -d '{"initial_value": 100000, "expected_return": 0.10, "volatility": 0.20,
+       "periods": 252, "simulations": 10000, "seed": 42}'
+```
+
+```json
+{
+  "metric": "Monte Carlo Simulation (GBM)",
+  "seed_used": 42,
+  "simulations": 10000,
+  "periods": 252,
+  "horizon_years": 1.0,
+  "final_value": {"mean": 110715.39398467637, "standard_deviation": 22443.416504719047, "...": "..."},
+  "probability_of_loss": 0.3446,
+  "value_at_risk": {"amount": 21949.772572680522, "decimal": 0.21949772572680523},
+  "theoretical_mean_final_value": 110517.09180756476,
+  "...": "..."
+}
+```
+
+Sensitivity example (Gordon growth value over cost of equity × growth):
+
+```bash
+curl -X POST http://localhost:8000/api/v1/scenarios/sensitivity-analysis \
+  -H "Content-Type: application/json" \
+  -d '{"model": "valuation/gordon-growth", "output": "value",
+       "base_inputs": {"current_dividend": 2, "cost_of_equity": 0.10, "growth_rate": 0.05},
+       "variables": [{"name": "cost_of_equity", "values": [0.05, 0.10]},
+                     {"name": "growth_rate", "values": [0.03, 0.05]}]}'
+```
+
+The response contains every point (with `error` for invalid combinations such as
+`cost_of_equity = growth_rate`) and a `table` with rows per cost of equity and columns per growth.
+
+| Endpoint | Purpose | Formula |
+|---|---|---|
+| `GET /api/v1/scenarios/models` | List models usable by sensitivity/scenario analysis | — |
+| `POST /api/v1/scenarios/sensitivity-analysis` | Sensitivity Analysis | `output(v1) for each value of one variable, or output(v1, v2) over the grid of two` |
+| `POST /api/v1/scenarios/scenario-analysis` | Scenario Analysis | `inputs_s = base_inputs with the scenario overrides applied` |
+| `POST /api/v1/scenarios/stress-test` | Stress Test | `shock return_i = Σ_f sensitivity_(i,f) × shock_f` |
+| `POST /api/v1/scenarios/monte-carlo` | Monte Carlo Simulation | `S_t = S_(t−1) × exp((μ − σ²/2) Δt + σ √Δt Z_t), Z_t ~ N(0, 1), Δt = 1 / ppy` |
+
 ---
 
 ## Conventions
@@ -899,12 +968,14 @@ successor of `httpx` required by Starlette 1.x.
 | 5 | Risk + Statistics (38 endpoints) | ✅ |
 | 6 | Portfolio (17 endpoints) | ✅ |
 | 7 | Technical Analysis (16 endpoints) | ✅ |
-| 8 | Scenarios + Monte Carlo | pending |
+| 8 | Scenarios + Monte Carlo (4 endpoints) | ✅ |
 
 ## Limitations
 
 - Bonds are priced on coupon dates only: no accrued interest, settlement dates or day counts.
 - IRR assumes equally spaced periods; ambiguous IRRs (several real roots) are rejected.
+- Monte Carlo uses a single-asset geometric Brownian motion (constant μ and σ, normal shocks);
+  stress tests are linear (first-order) approximations.
 - Portfolio optimizations are single-period mean-variance models with box bounds; no transaction costs, cardinality or sector constraints.
 - float64 arithmetic (no `Decimal`): suitable for analytics, not for accounting ledgers.
 - No market data, no persistence, no recommendations — by design.

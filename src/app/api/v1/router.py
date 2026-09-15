@@ -10,6 +10,7 @@ from app.api.v1.routes import (
     fundamentals,
     portfolio,
     risk,
+    scenarios,
     statistics,
     technical,
     valuation,
@@ -26,3 +27,4 @@ api_router.include_router(risk.router)
 api_router.include_router(statistics.router)
 api_router.include_router(portfolio.router)
 api_router.include_router(technical.router)
+api_router.include_router(scenarios.router)
