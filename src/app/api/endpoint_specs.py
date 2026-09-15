@@ -15,12 +15,13 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Body
+from fastapi import APIRouter, Body, Request
 from pydantic import BaseModel
 
+from app.core.config import Settings
 from app.core.exceptions import NonFiniteResultError
 from app.schemas.common import BaseRequest, MetricResponse, Unit, error_responses
-from app.utils.validation import ensure_finite
+from app.utils.validation import ensure_finite, ensure_max_length
 
 _UNIT_HINTS: dict[Unit, str] = {
     Unit.MULTIPLE: "ratio read as 'x'",
@@ -53,6 +54,22 @@ def _describe(
     if notes:
         lines += ["", "**Assumptions and notes:**", *(f"- {note}" for note in notes)]
     return "\n".join(lines)
+
+
+def enforce_series_limit(model: BaseModel, limit: int) -> None:
+    """Raise LimitExceededError if any list in the request (at any depth) exceeds `limit` items."""
+
+    def walk(value: Any, path: str) -> None:
+        if isinstance(value, BaseModel):
+            for field_name in type(value).model_fields:
+                walk(getattr(value, field_name), f"{path}.{field_name}" if path else field_name)
+        elif isinstance(value, list):
+            ensure_max_length(value, limit, path)
+            for index, item in enumerate(value):
+                if isinstance(item, BaseModel | list):
+                    walk(item, f"{path}[{index}]")
+
+    walk(model, "")
 
 
 def ensure_finite_model(model: BaseModel) -> None:
@@ -184,7 +201,9 @@ def _register(
     response_examples: Mapping[str, Any],
     build_response: Callable[[Any], BaseModel],
 ) -> None:
-    def handler(payload: BaseRequest) -> BaseModel:
+    def handler(request: Request, payload: BaseRequest) -> BaseModel:
+        settings: Settings = request.app.state.settings
+        enforce_series_limit(payload, settings.max_series_length)
         return build_response(payload)
 
     body = Body(
@@ -196,10 +215,13 @@ def _register(
     handler.__signature__ = inspect.Signature(  # type: ignore[attr-defined]
         parameters=[
             inspect.Parameter(
+                "request", inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation=Request
+            ),
+            inspect.Parameter(
                 "payload",
                 inspect.Parameter.POSITIONAL_OR_KEYWORD,
                 annotation=Annotated[request_model, body],
-            )
+            ),
         ],
         return_annotation=response_model,
     )

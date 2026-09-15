@@ -11,8 +11,8 @@ It is consumed by JARVIS (the main AI system) over HTTP/REST. This service:
 - does **not** issue buy/sell/hold recommendations or opinions;
 - does **not** access JARVIS's code, database or API.
 
-> **Status:** Phase 4 complete — API foundation, Fundamental Analysis (59 endpoints),
-> Valuation (21 endpoints) and Fixed Income (21 endpoints).
+> **Status:** Phase 5 complete — API foundation, Fundamental Analysis (59 endpoints),
+> Valuation (21), Fixed Income (21), Risk (24) and Statistics (14).
 > See [Roadmap](#roadmap).
 
 ---
@@ -541,6 +541,130 @@ curl -X POST http://localhost:8000/api/v1/fixed-income/irr \
 | `POST /api/v1/fixed-income/spot-rates` | Spot Curve | `d_k = (price_k − c_k × Σ_{j<k} d_j) / (c_k + face_value_k)` | structured |
 | `POST /api/v1/fixed-income/irr` | IRR | `Solve r: Σ CF_t / (1 + r)^t = 0, t = 0..n` | structured |
 
+### Risk and risk-adjusted returns
+
+Input conventions specific to this domain:
+
+- Series endpoints accept `returns` **or** `prices` (not both). Paired endpoints accept
+  `asset_returns`/`asset_prices` and `benchmark_returns`/`benchmark_prices`; both series must cover
+  the same periods.
+- `return_type`: `simple` (default, `P_t / P_(t−1) − 1`) or `log` (`ln(P_t / P_(t−1))`). Simple
+  returns must be > −1.
+- `periods_per_year` defaults to **252** (use 52 weekly, 12 monthly).
+- Annual rates (`risk_free_rate`, `minimum_acceptable_return`) are converted to the return period:
+  `(1 + r)^(1/ppy) − 1` (simple) or `ln(1 + r)/ppy` (log).
+- Annualization: returns are **geometric**; dispersion is multiplied by `√ppy`. Sample statistics
+  (ddof = 1) unless `population: true`.
+- Maximum drawdown is **negative** (−0.25 = −25%) with peak/trough/recovery indices.
+- VaR and expected shortfall are **positive losses**; historical uses the empirical quantile with
+  linear interpolation; parametric assumes normal returns; `horizon_periods` scales by `√h`.
+  `/cvar` and `/expected-shortfall` share one implementation.
+- `/alpha` is the OLS intercept of excess returns (× ppy); `/jensens-alpha` uses annualized
+  geometric returns and β.
+- Series longer than `MAX_SERIES_LENGTH` return `400 LIMIT_EXCEEDED`.
+
+Sharpe example:
+
+```bash
+curl -X POST http://localhost:8000/api/v1/risk/sharpe \
+  -H "Content-Type: application/json" \
+  -d '{"returns": [0.012, -0.008, 0.015, -0.021, 0.009, 0.004, -0.013, 0.018, 0.007, -0.005],
+       "risk_free_rate": 0.05}'
+```
+
+```json
+{"metric": "Sharpe Ratio", "value": 1.9715698581467, "unit": "number", "currency": null}
+```
+
+##### Returns and dispersion
+
+| Endpoint | Result | Formula | Unit |
+|---|---|---|---|
+| `POST /api/v1/risk/cumulative-return` | Cumulative Return | `simple: Π(1 + r_t) − 1 · log: e^(Σ r_t) − 1` | `decimal` |
+| `POST /api/v1/risk/annualized-return` | Annualized Return | `(1 + cumulative_return)^(periods_per_year / n) − 1` | `decimal` |
+| `POST /api/v1/risk/standard-deviation` | Standard Deviation | `σ = √(Σ (r − r̄)² / (n − ddof)), ddof = 1 unless population` | `decimal` |
+| `POST /api/v1/risk/returns` | Returns | `simple: r_t = P_t / P_{t−1} − 1` | structured |
+| `POST /api/v1/risk/volatility` | Volatility | `σ_annual = σ_periodic × √periods_per_year` | structured |
+| `POST /api/v1/risk/variance` | Variance | `σ² = Σ (r − r̄)² / (n − ddof)` | structured |
+| `POST /api/v1/risk/downside-deviation` | Downside Deviation | `DD_periodic = √(Σ min(r_t − MAR_p, 0)² / N)` | structured |
+
+##### Market sensitivity
+
+| Endpoint | Result | Formula | Unit |
+|---|---|---|---|
+| `POST /api/v1/risk/beta` | Beta | `β = cov(asset, benchmark) / var(benchmark)` | `number` |
+| `POST /api/v1/risk/correlation` | Correlation | `ρ = Σ (a − ā)(b − b̄) / √(Σ (a − ā)² × Σ (b − b̄)²)` | `number` |
+| `POST /api/v1/risk/covariance` | Covariance | `cov = Σ (a − ā)(b − b̄) / (n − ddof), ddof = 1 unless population` | `number` |
+| `POST /api/v1/risk/r-squared` | R² | `R² = ρ(asset, benchmark)²` | `number` |
+| `POST /api/v1/risk/alpha` | Alpha | `(r_a − rf_p) = α + β × (r_b − rf_p)  (ordinary least squares)` | structured |
+
+##### Drawdown and tail risk
+
+| Endpoint | Result | Formula | Unit |
+|---|---|---|---|
+| `POST /api/v1/risk/maximum-drawdown` | Maximum Drawdown | `MDD = min_t (W_t / max_{s≤t} W_s − 1)` | structured |
+| `POST /api/v1/risk/var/historical` | Historical VaR | `VaR = −q_(1−confidence) × √h, q = empirical quantile with linear interpolation` | structured |
+| `POST /api/v1/risk/var/parametric` | Parametric VaR | `VaR = −(μ × h − z × σ × √h), z = Φ⁻¹(confidence)` | structured |
+| `POST /api/v1/risk/cvar` | Conditional VaR | `historical: ES = −mean(r_t | r_t ≤ q_(1−c)), q = empirical quantile (linear)` | structured |
+| `POST /api/v1/risk/expected-shortfall` | Expected Shortfall | `historical: ES = −mean(r_t | r_t ≤ q_(1−c)), q = empirical quantile (linear)` | structured |
+
+##### Risk-adjusted returns
+
+| Endpoint | Result | Formula | Unit |
+|---|---|---|---|
+| `POST /api/v1/risk/sharpe` | Sharpe Ratio | `Sharpe = mean(r − rf_p) / σ(r − rf_p) × √periods_per_year` | `number` |
+| `POST /api/v1/risk/sortino` | Sortino Ratio | `Sortino = mean(r − MAR_p) / DD × √periods_per_year, DD = √(Σ min(r − MAR_p, 0)² / N)` | `number` |
+| `POST /api/v1/risk/treynor` | Treynor Ratio | `Treynor = (annualized asset return − risk_free_rate) / β` | `number` |
+| `POST /api/v1/risk/calmar` | Calmar Ratio | `Calmar = annualized return / |maximum drawdown|` | `number` |
+| `POST /api/v1/risk/information-ratio` | Information Ratio | `active_t = r_asset,t − r_benchmark,t` | structured |
+| `POST /api/v1/risk/jensens-alpha` | Jensen's Alpha | `α = R_p − [rf + β × (R_m − rf)]` | structured |
+| `POST /api/v1/risk/m2` | Modigliani M² | `M² = Sharpe_p × σ_benchmark + rf` | structured |
+
+### Statistics
+
+- Sample statistics (ddof = 1) by default; percentiles/quartiles use linear interpolation
+  (`lower`, `higher`, `midpoint`, `nearest` also available).
+- Skewness is the adjusted Fisher-Pearson G1 and kurtosis the bias-corrected **excess** G2 by
+  default (formulas implemented explicitly and validated against SciPy).
+- The confidence interval of the mean uses Student's t. Linear regression is OLS with standard
+  errors, t-statistic and two-sided p-value (at least 3 observations).
+- Constant samples (zero variance) return `DIVISION_BY_ZERO` where the statistic is undefined.
+
+Linear regression example:
+
+```bash
+curl -X POST http://localhost:8000/api/v1/statistics/linear-regression \
+  -H "Content-Type: application/json" \
+  -d '{"x": [1, 2, 3, 4, 5, 6, 7], "y": [2.3, 3.8, 6.4, 7.7, 10.4, 11.9, 14.2]}'
+```
+
+```json
+{
+  "metric": "Linear Regression", "slope": 1.9964285714285714, "intercept": 0.11428571428571388,
+  "correlation": 0.99767995739388, "r_squared": 0.9953652973854543,
+  "residual_standard_error": 0.3223795456113359, "slope_standard_error": 0.06092400753297135,
+  "intercept_standard_error": 0.2724604446108664, "slope_t_statistic": 32.76916034041471,
+  "slope_p_value": 4.973404141064311e-07, "observations": 7
+}
+```
+
+| Endpoint | Result | Formula | Unit |
+|---|---|---|---|
+| `POST /api/v1/statistics/mean` | Mean | `mean = Σ x / n` | `number` |
+| `POST /api/v1/statistics/median` | Median | `middle value of the sorted sample (average of the two middle values if n is even)` | `number` |
+| `POST /api/v1/statistics/variance` | Variance | `s² = Σ (x − x̄)² / (n − ddof)` | `number` |
+| `POST /api/v1/statistics/standard-deviation` | Standard Deviation | `s = √(Σ (x − x̄)² / (n − ddof))` | `number` |
+| `POST /api/v1/statistics/skewness` | Skewness | `g1 = m3 / m2^(3/2); G1 = g1 × √(n (n − 1)) / (n − 2)` | `number` |
+| `POST /api/v1/statistics/kurtosis` | Kurtosis | `g2 = m4 / m2² − 3; G2 = [(n + 1) g2 + 6] × (n − 1) / ((n − 2)(n − 3))` | `number` |
+| `POST /api/v1/statistics/covariance` | Covariance | `cov = Σ (x − x̄)(y − ȳ) / (n − ddof)` | `number` |
+| `POST /api/v1/statistics/correlation` | Correlation | `r = Σ (x − x̄)(y − ȳ) / √(Σ (x − x̄)² × Σ (y − ȳ)²)` | `number` |
+| `POST /api/v1/statistics/r-squared` | R² | `R² = r(x, y)²` | `number` |
+| `POST /api/v1/statistics/percentiles` | Percentiles | `linear: x_(k) + (h − k) × (x_(k+1) − x_(k)), h = (n − 1) × p / 100` | structured |
+| `POST /api/v1/statistics/quartiles` | Quartiles | `Q1 = P25, Q2 = P50, Q3 = P75` | structured |
+| `POST /api/v1/statistics/z-score` | Z-Score | `z = (x − mean) / standard deviation` | structured |
+| `POST /api/v1/statistics/confidence-interval` | Confidence Interval | `mean ± t_((1+c)/2, n−1) × s / √n` | structured |
+| `POST /api/v1/statistics/linear-regression` | Linear Regression | `slope = Σ (x − x̄)(y − ȳ) / Σ (x − x̄)², intercept = ȳ − slope × x̄` | structured |
+
 ---
 
 ## Conventions
@@ -646,7 +770,7 @@ successor of `httpx` required by Starlette 1.x.
 | 2 | Fundamental Analysis (59 endpoints) | ✅ |
 | 3 | Valuation (21 endpoints) | ✅ |
 | 4 | Fixed Income (21 endpoints) | ✅ |
-| 5 | Risk + Statistics | pending |
+| 5 | Risk + Statistics (38 endpoints) | ✅ |
 | 6 | Portfolio | pending |
 | 7 | Technical Analysis | pending |
 | 8 | Scenarios + Monte Carlo | pending |
