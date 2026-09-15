@@ -1,0 +1,20 @@
+name: investment-calculation-api
+
+services:
+  api:
+    build: .
+    image: investment-calculation-api:local
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      APP_HOST: 0.0.0.0
+      APP_PORT: 8000
+    ports:
+      - "${HOST_PORT:-8000}:8000"
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
