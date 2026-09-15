@@ -56,6 +56,39 @@ def correlation(
     return max(-1.0, min(1.0, float(np.dot(x_dev, y_dev)) / denominator))
 
 
+def covariance_matrix(
+    observations: Sequence[Sequence[float]], *, population: bool = False
+) -> FloatArray:
+    """Covariance matrix of columns (rows = observations, columns = variables).
+
+    Σ_ij = Σ_t (x_ti − x̄_i)(x_tj − x̄_j) / (T − ddof); constant columns get exactly zero rows.
+    """
+    ddof = ddof_for(population)
+    data = np.asarray(observations, dtype=np.float64)
+    if data.ndim != 2 or data.shape[1] == 0:
+        raise InvalidInputError("observations must be a non-empty rectangular matrix")
+    if data.shape[0] < ddof + 1:
+        raise InsufficientDataError(f"at least {ddof + 1} observations are required")
+    deviations = data - data.mean(axis=0)
+    constant = np.ptp(data, axis=0) == 0
+    deviations[:, constant] = 0.0
+    matrix = deviations.T @ deviations / (data.shape[0] - ddof)
+    if not np.all(np.isfinite(matrix)):
+        raise InvalidInputError("covariance matrix is not finite")
+    return matrix
+
+
+def correlation_from_covariance(matrix: FloatArray) -> FloatArray:
+    """ρ_ij = Σ_ij / (σ_i σ_j); undefined when a variable has zero variance."""
+    variances = np.diag(matrix)
+    if np.any(variances <= 0):
+        raise DivisionByZeroError("correlation is undefined when a variable has zero variance")
+    scale = np.sqrt(variances)
+    correlation_matrix = np.clip(matrix / np.outer(scale, scale), -1.0, 1.0)
+    np.fill_diagonal(correlation_matrix, 1.0)
+    return correlation_matrix
+
+
 def r_squared(
     x: Sequence[float], y: Sequence[float], *, x_name: str = "x", y_name: str = "y"
 ) -> float:

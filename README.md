@@ -11,8 +11,8 @@ It is consumed by JARVIS (the main AI system) over HTTP/REST. This service:
 - does **not** issue buy/sell/hold recommendations or opinions;
 - does **not** access JARVIS's code, database or API.
 
-> **Status:** Phase 5 complete — API foundation, Fundamental Analysis (59 endpoints),
-> Valuation (21), Fixed Income (21), Risk (24) and Statistics (14).
+> **Status:** Phase 6 complete — API foundation, Fundamental Analysis (59 endpoints),
+> Valuation (21), Fixed Income (21), Risk (24), Statistics (14) and Portfolio (17).
 > See [Roadmap](#roadmap).
 
 ---
@@ -665,6 +665,70 @@ curl -X POST http://localhost:8000/api/v1/statistics/linear-regression \
 | `POST /api/v1/statistics/confidence-interval` | Confidence Interval | `mean ± t_((1+c)/2, n−1) × s / √n` | structured |
 | `POST /api/v1/statistics/linear-regression` | Linear Regression | `slope = Σ (x − x̄)(y − ȳ) / Σ (x − x̄)², intercept = ȳ − slope × x̄` | structured |
 
+### Portfolio
+
+Input conventions specific to this domain:
+
+- `weights` are decimals summing to 1 (tolerance 1e-6); shorts are allowed in analytics.
+  Concentration and risk parity require long-only portfolios.
+- Market inputs: send `covariance_matrix` (square, symmetric, positive semi-definite; used as-is,
+  so results are in its period) plus `expected_returns` when needed, **or** a simple `returns`
+  matrix (rows = periods, columns = assets), which is annualized: `μ = mean × ppy`,
+  `Σ = sample covariance × ppy`.
+- `asset_names` are optional labels (default `asset_1`, `asset_2`, ...).
+- Optimizations use `min_weight` / `max_weight` per asset (default long-only 0 to 1); infeasible
+  bounds return `INVALID_INPUT`. Minimum variance, maximum Sharpe and the efficient frontier are
+  solved with SLSQP; risk parity uses a convex log-barrier formulation and verifies equal risk
+  contributions.
+- The efficient frontier spans from the minimum-variance portfolio to the maximum-return
+  portfolio under the bounds.
+
+Maximum Sharpe example:
+
+```bash
+curl -X POST http://localhost:8000/api/v1/portfolio/maximum-sharpe \
+  -H "Content-Type: application/json" \
+  -d '{"covariance_matrix": [[0.04, 0.006, 0.002], [0.006, 0.09, 0.018], [0.002, 0.018, 0.0225]],
+       "expected_returns": [0.08, 0.14, 0.06], "risk_free_rate": 0.02,
+       "asset_names": ["stocks", "bonds", "real_estate"]}'
+```
+
+```json
+{
+  "metric": "Maximum Sharpe Portfolio",
+  "weights": [
+    {"asset": "stocks", "weight": 0.40824915892434177},
+    {"asset": "bonds", "weight": 0.3425925949636788},
+    {"asset": "real_estate", "weight": 0.2491582461119795}
+  ],
+  "expected_return": 0.09557239077558115,
+  "volatility": 0.15422369130170258,
+  "variance": 0.02378494695872285,
+  "sharpe_ratio": 0.4900180389778211,
+  "risk_contributions": null
+}
+```
+
+| Endpoint | Result | Formula | Unit |
+|---|---|---|---|
+| `POST /api/v1/portfolio/expected-return` | Portfolio Expected Return | `E(R_p) = Σ w_i × E(R_i)` | `decimal` |
+| `POST /api/v1/portfolio/variance` | Portfolio Variance | `σ²_p = wᵀ Σ w` | `number` |
+| `POST /api/v1/portfolio/volatility` | Portfolio Volatility | `σ_p = √(wᵀ Σ w)` | `decimal` |
+| `POST /api/v1/portfolio/beta` | Portfolio Beta | `asset_betas: β_p = Σ w_i β_i · returns: β_p = cov(r_p, r_b) / var(r_b)` | `number` |
+| `POST /api/v1/portfolio/tracking-error` | Tracking Error | `ex_post: σ(r_p − r_b) × √ppy · ex_ante: √((w − w_b)ᵀ Σ (w − w_b))` | `decimal` |
+| `POST /api/v1/portfolio/turnover` | Turnover | `Turnover = Σ |w_target − w_current| / 2` | `decimal` |
+| `POST /api/v1/portfolio/return` | Portfolio Return | `r_p,t = Σ w_i r_i,t` | structured |
+| `POST /api/v1/portfolio/covariance` | Covariance Matrix | `Σ_ij = Σ_t (r_ti − r̄_i)(r_tj − r̄_j) / (T − ddof)` | structured |
+| `POST /api/v1/portfolio/correlation` | Correlation Matrix | `ρ_ij = Σ_ij / (σ_i σ_j)` | structured |
+| `POST /api/v1/portfolio/alpha` | Portfolio Alpha | `r_p,t = Σ w_i r_i,t` | structured |
+| `POST /api/v1/portfolio/risk-contribution` | Risk Contribution | `MRC_i = (Σ w)_i / σ_p` | structured |
+| `POST /api/v1/portfolio/concentration` | Concentration | `HHI = Σ w_i²` | structured |
+| `POST /api/v1/portfolio/minimum-variance` | Minimum Variance Portfolio | `min wᵀΣw  s.t.  Σ w_i = 1, min_weight ≤ w_i ≤ max_weight` | structured |
+| `POST /api/v1/portfolio/maximum-sharpe` | Maximum Sharpe Portfolio | `max (wᵀμ − rf) / √(wᵀΣw)  s.t.  Σ w_i = 1, min_weight ≤ w_i ≤ max_weight` | structured |
+| `POST /api/v1/portfolio/efficient-frontier` | Efficient Frontier | `for target μ* evenly spaced from μ(minimum variance) to max attainable μ:` | structured |
+| `POST /api/v1/portfolio/risk-parity` | Risk Parity Portfolio | `min ½ yᵀΣy − (1/N) Σ ln y_i, y > 0;  w = y / Σ y` | structured |
+| `POST /api/v1/portfolio/inverse-volatility` | Inverse Volatility Portfolio | `w_i = (1 / σ_i) / Σ_j (1 / σ_j)` | structured |
+
 ---
 
 ## Conventions
@@ -771,7 +835,7 @@ successor of `httpx` required by Starlette 1.x.
 | 3 | Valuation (21 endpoints) | ✅ |
 | 4 | Fixed Income (21 endpoints) | ✅ |
 | 5 | Risk + Statistics (38 endpoints) | ✅ |
-| 6 | Portfolio | pending |
+| 6 | Portfolio (17 endpoints) | ✅ |
 | 7 | Technical Analysis | pending |
 | 8 | Scenarios + Monte Carlo | pending |
 
@@ -779,6 +843,7 @@ successor of `httpx` required by Starlette 1.x.
 
 - Bonds are priced on coupon dates only: no accrued interest, settlement dates or day counts.
 - IRR assumes equally spaced periods; ambiguous IRRs (several real roots) are rejected.
+- Portfolio optimizations are single-period mean-variance models with box bounds; no transaction costs, cardinality or sector constraints.
 - float64 arithmetic (no `Decimal`): suitable for analytics, not for accounting ledgers.
 - No market data, no persistence, no recommendations — by design.
 - Authentication is a single optional shared API key; no users, roles or rate limiting yet.
