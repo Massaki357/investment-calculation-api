@@ -14,6 +14,7 @@ from app.services.technical.common import (
     pad,
     require_length,
     require_period,
+    rolling_reduce,
     seeded_ema,
     windows,
 )
@@ -60,9 +61,8 @@ def bollinger_bands(
         raise InvalidInputError("standard_deviations must be greater than zero")
     data = as_series(prices, "prices", positive=True)
     require_length(data.size, period, f"Bollinger Bands({period})")
-    price_windows = windows(data, period)
-    middle = price_windows.mean(axis=1)
-    sigma = price_windows.std(axis=1, ddof=0)
+    middle = windows(data, period).mean(axis=1)
+    sigma = rolling_reduce(data, period, lambda rows: rows.std(axis=1, ddof=0))
     upper = middle + standard_deviations * sigma
     lower = middle - standard_deviations * sigma
     width = upper - lower
@@ -89,5 +89,5 @@ def historical_volatility(
     data = as_series(prices, "prices", positive=True)
     require_length(data.size, period + 1, f"Historical Volatility({period})")
     log_returns = np.log(data[1:] / data[:-1])
-    sigma = windows(log_returns, period).std(axis=1, ddof=1)
+    sigma = rolling_reduce(log_returns, period, lambda rows: rows.std(axis=1, ddof=1))
     return pad(sigma * math.sqrt(periods_per_year), data.size)

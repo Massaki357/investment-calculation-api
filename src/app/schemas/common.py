@@ -98,9 +98,11 @@ class ErrorResponse(BaseModel):
 
 _ERROR_DESCRIPTIONS: dict[int, str] = {
     400: "Invalid data for the calculation (e.g. DIVISION_BY_ZERO, INVALID_INPUT, "
-    "INSUFFICIENT_DATA, CONVERGENCE_ERROR, NON_FINITE_RESULT, LIMIT_EXCEEDED, MALFORMED_REQUEST).",
+    "INSUFFICIENT_DATA, CONVERGENCE_ERROR, NON_FINITE_RESULT, MALFORMED_REQUEST), or a safety "
+    "limit was exceeded (LIMIT_EXCEEDED: series length, grid size, simulation cells, time limit).",
     401: "Missing or invalid X-API-Key (only when authentication is enabled).",
     404: "Endpoint or resource not found (NOT_FOUND).",
+    413: "Request body larger than MAX_REQUEST_BODY_BYTES (PAYLOAD_TOO_LARGE).",
     422: "Request body failed schema validation (VALIDATION_ERROR).",
     500: "Unexpected internal error (INTERNAL_ERROR). No internal details are exposed.",
 }
@@ -108,7 +110,7 @@ _ERROR_DESCRIPTIONS: dict[int, str] = {
 
 def error_responses(*status_codes: int) -> dict[int | str, dict[str, Any]]:
     """Build the `responses=` mapping that documents error envelopes in OpenAPI."""
-    codes = status_codes or (400, 422, 500)
+    codes = status_codes or (400, 413, 422, 500)
     return {
         code: {"model": ErrorResponse, "description": _ERROR_DESCRIPTIONS[code]} for code in codes
     }

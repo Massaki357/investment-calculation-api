@@ -8,7 +8,7 @@ import pandas as pd
 import pytest
 
 from app.core.exceptions import InsufficientDataError, InvalidInputError
-from app.services.technical import averages, momentum, volatility, volume
+from app.services.technical import averages, common, momentum, volatility, volume
 
 CLOSES = [
     44.34, 44.09, 44.15, 43.61, 44.33, 44.83, 45.10, 45.42, 45.84, 46.08,
@@ -187,3 +187,19 @@ class TestVolume:
     def test_volumes_must_align(self) -> None:
         with pytest.raises(InvalidInputError, match="same length"):
             volume.obv([10, 11], [100])
+
+
+class TestRollingReduce:
+    def test_chunks_match_a_single_pass(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        values = np.random.default_rng(7).normal(100, 5, 500)
+        expected = common.windows(values, 30).std(axis=1, ddof=1)
+        # 90 cells per chunk = 3 windows of 30: many chunks plus a partial last one.
+        monkeypatch.setattr(common, "_WINDOW_CHUNK_CELLS", 90)
+        result = common.rolling_reduce(values, 30, lambda rows: rows.std(axis=1, ddof=1))
+        assert result.shape == expected.shape
+        assert np.array_equal(result, expected)
+
+    def test_period_larger_than_chunk(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(common, "_WINDOW_CHUNK_CELLS", 2)
+        result = common.rolling_reduce(np.arange(6.0), 4, lambda rows: rows.sum(axis=1))
+        assert result.tolist() == [6.0, 10.0, 14.0]

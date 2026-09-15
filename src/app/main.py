@@ -9,7 +9,11 @@ from app.api.v1.router import api_router
 from app.core.config import Settings, get_settings
 from app.core.error_handlers import register_error_handlers
 from app.core.logging import configure_logging
-from app.core.middleware import REQUEST_ID_HEADER, RequestContextMiddleware
+from app.core.middleware import (
+    REQUEST_ID_HEADER,
+    BodySizeLimitMiddleware,
+    RequestContextMiddleware,
+)
 from app.core.security import API_KEY_HEADER
 
 API_DESCRIPTION = """
@@ -43,9 +47,10 @@ Every error uses the same envelope:
 
 | HTTP | Meaning |
 |---|---|
-| 400 | Invalid data for the calculation |
+| 400 | Invalid data for the calculation, malformed body or exceeded limit (`LIMIT_EXCEEDED`) |
 | 401 | Missing/invalid `X-API-Key` (only when authentication is enabled) |
 | 404 | Endpoint or resource not found |
+| 413 | Request body larger than `MAX_REQUEST_BODY_BYTES` |
 | 422 | Schema validation error (`details` lists the invalid fields) |
 | 500 | Internal error (no internal details exposed) |
 """
@@ -65,7 +70,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     app.state.settings = settings
 
-    # Middleware added last runs first: request context wraps CORS so every request is logged.
+    # Middleware added last runs first: request context → CORS → body size limit → routes, so every
+    # request is logged and a 413 still carries CORS headers.
+    app.add_middleware(BodySizeLimitMiddleware, max_bytes=settings.max_request_body_bytes)
     if settings.cors_origins:
         app.add_middleware(
             CORSMiddleware,

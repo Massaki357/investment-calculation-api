@@ -12,7 +12,7 @@ def test_error_responses_are_documented_with_envelope_model(client: TestClient) 
     schema = client.get("/openapi.json").json()
 
     responses = schema["paths"]["/_test/ratio"]["post"]["responses"]
-    assert {"400", "422", "500"} <= set(responses)
+    assert {"400", "413", "422", "500"} <= set(responses)
     assert responses["400"]["content"]["application/json"]["schema"] == {
         "$ref": "#/components/schemas/ErrorResponse"
     }

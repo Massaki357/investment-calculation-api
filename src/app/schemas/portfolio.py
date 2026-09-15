@@ -26,7 +26,7 @@ AssetNames = Annotated[
     ),
 ]
 CovarianceMatrix = Annotated[
-    list[list[float]],
+    list[Annotated[list[float], Field(max_length=MAX_ASSETS)]],
     Field(
         min_length=1,
         max_length=MAX_ASSETS,
@@ -34,8 +34,11 @@ CovarianceMatrix = Annotated[
         "expressed in the same period as this matrix.",
     ),
 ]
+# One row of a returns matrix: capped at MAX_ASSETS columns, since covariance estimates grow
+# with the square of the number of assets.
+ReturnsRow = Annotated[list[float], Field(max_length=MAX_ASSETS)]
 ReturnsMatrix = Annotated[
-    list[list[float]],
+    list[ReturnsRow],
     Field(
         min_length=2,
         description="Simple returns matrix: one row per period, one column per asset (≥ 2 rows). "
@@ -119,7 +122,7 @@ class PortfolioRiskRequest(_CovarianceInput):
 class PortfolioReturnRequest(BaseRequest):
     weights: Weights
     returns: Annotated[
-        list[list[float]],
+        list[ReturnsRow],
         Field(min_length=1, description="Simple returns matrix: rows = periods, columns = assets."),
     ]
     periods_per_year: PeriodsPerYear = 252

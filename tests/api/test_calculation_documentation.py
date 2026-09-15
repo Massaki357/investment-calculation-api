@@ -61,7 +61,7 @@ def test_description_formula_and_error_responses(openapi: dict[str, Any], path: 
 
     assert operation["summary"]
     assert "**Formula" in operation["description"]
-    assert {"200", "400", "422", "500"} <= set(operation["responses"])
+    assert {"200", "400", "413", "422", "500"} <= set(operation["responses"])
     error_schema = operation["responses"]["400"]["content"]["application/json"]["schema"]
     assert error_schema == {"$ref": "#/components/schemas/ErrorResponse"}
 

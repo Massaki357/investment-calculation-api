@@ -8,6 +8,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from app.core.exceptions import InvalidInputError, LimitExceededError
+from app.core.time_budget import check_time_budget
 from app.services.statistics.descriptive import FloatArray
 
 # Simulations are generated in batches so memory stays bounded; the random stream is consumed in
@@ -70,6 +71,7 @@ def simulate_gbm(
     log_initial = math.log(initial_value)
 
     for start in range(0, simulations, batch_size):
+        check_time_budget()
         count = min(batch_size, simulations - start)
         shocks = generator.standard_normal((count, periods))
         log_paths = log_initial + np.cumsum(drift + diffusion * shocks, axis=1)

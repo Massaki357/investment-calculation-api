@@ -36,9 +36,9 @@ def as_long_only(weights: FloatArray, name: str = "weights") -> FloatArray:
 
 def as_covariance(matrix: Sequence[Sequence[float]]) -> FloatArray:
     """Validate a covariance matrix: square, symmetric and positive semi-definite."""
-    data = np.asarray(matrix, dtype=np.float64)
-    if data.ndim != 2 or data.shape[0] != data.shape[1] or data.shape[0] == 0:
+    if not matrix or any(len(row) != len(matrix) for row in matrix):
         raise InvalidInputError("covariance_matrix must be a non-empty square matrix")
+    data = np.asarray(matrix, dtype=np.float64)
     scale = max(float(np.max(np.abs(data))), 1e-300)
     if not np.allclose(data, data.T, rtol=0, atol=_SYMMETRY_TOLERANCE * scale):
         raise InvalidInputError("covariance_matrix must be symmetric")

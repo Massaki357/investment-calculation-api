@@ -15,6 +15,7 @@ from app.core.logging import get_logger
 logger = get_logger("errors")
 
 _HTTP_CODES: dict[int, str] = {
+    400: "MALFORMED_REQUEST",  # body that could not be parsed at all (e.g. absurdly nested JSON)
     401: "UNAUTHORIZED",
     404: "NOT_FOUND",
     405: "METHOD_NOT_ALLOWED",
@@ -23,7 +24,7 @@ _HTTP_CODES: dict[int, str] = {
 }
 
 
-def _error_response(
+def error_response(
     status_code: int,
     code: str,
     message: str,
@@ -48,7 +49,7 @@ def _format_field(location: tuple[Any, ...]) -> str:
 async def app_error_handler(_: Request, exc: Exception) -> JSONResponse:
     if not isinstance(exc, AppError):
         raise exc
-    return _error_response(exc.status_code, exc.code, exc.message, exc.details)
+    return error_response(exc.status_code, exc.code, exc.message, exc.details)
 
 
 async def validation_error_handler(_: Request, exc: Exception) -> JSONResponse:
@@ -57,7 +58,7 @@ async def validation_error_handler(_: Request, exc: Exception) -> JSONResponse:
     errors = exc.errors()
 
     if any(error.get("type") == "json_invalid" for error in errors):
-        return _error_response(400, "MALFORMED_REQUEST", "Request body is not valid JSON")
+        return error_response(400, "MALFORMED_REQUEST", "Request body is not valid JSON")
 
     # Only field path, message and type: never echo the submitted input back.
     details = [
@@ -68,7 +69,7 @@ async def validation_error_handler(_: Request, exc: Exception) -> JSONResponse:
         }
         for error in errors
     ]
-    return _error_response(422, "VALIDATION_ERROR", "Request validation failed", details)
+    return error_response(422, "VALIDATION_ERROR", "Request validation failed", details)
 
 
 async def http_error_handler(_: Request, exc: Exception) -> JSONResponse:
@@ -81,7 +82,7 @@ async def http_error_handler(_: Request, exc: Exception) -> JSONResponse:
     except ValueError:
         default_message = "HTTP error"
     message = exc.detail if isinstance(exc.detail, str) else default_message
-    return _error_response(status_code, code, message, headers=exc.headers)
+    return error_response(status_code, code, message, headers=exc.headers)
 
 
 async def unhandled_error_handler(request: Request, exc: Exception) -> JSONResponse:
@@ -92,7 +93,7 @@ async def unhandled_error_handler(request: Request, exc: Exception) -> JSONRespo
         extra={"request_id": request_id, "method": request.method, "path": request.url.path},
     )
     headers = {"X-Request-ID": request_id} if request_id else None
-    return _error_response(500, "INTERNAL_ERROR", "An unexpected error occurred", headers=headers)
+    return error_response(500, "INTERNAL_ERROR", "An unexpected error occurred", headers=headers)
 
 
 def register_error_handlers(app: FastAPI) -> None:

@@ -1,6 +1,6 @@
 """Shared helpers for indicator series."""
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
 import numpy as np
@@ -43,6 +43,22 @@ def same_length(**series: FloatArray) -> int:
 def windows(values: FloatArray, period: int) -> FloatArray:
     """Rolling windows of `period` consecutive values (one row per complete window)."""
     return sliding_window_view(values, period)
+
+
+# Temporaries created by a per-window reduction (e.g. deviations from the mean) are
+# windows × period cells; chunking keeps them near 8 MB instead of up to 100 000 × 1 000 cells.
+_WINDOW_CHUNK_CELLS = 1_000_000
+
+
+def rolling_reduce(
+    values: FloatArray, period: int, reducer: Callable[[FloatArray], FloatArray]
+) -> FloatArray:
+    """Apply `reducer` (rows of windows → one value per row) over rolling windows in chunks."""
+    view = windows(values, period)
+    step = max(1, _WINDOW_CHUNK_CELLS // period)
+    return np.concatenate(
+        [reducer(view[start : start + step]) for start in range(0, view.shape[0], step)]
+    )
 
 
 def pad(values: Sequence[float | None] | FloatArray, total: int) -> Series:

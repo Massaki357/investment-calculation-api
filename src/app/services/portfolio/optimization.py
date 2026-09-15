@@ -10,6 +10,7 @@ import numpy as np
 from scipy.optimize import minimize
 
 from app.core.exceptions import ConvergenceError, DivisionByZeroError, InvalidInputError
+from app.core.time_budget import check_time_budget
 from app.services.portfolio.analytics import risk_contributions, variance
 from app.services.portfolio.inputs import MarketInputs, require_expected_returns
 from app.services.statistics.descriptive import FloatArray
@@ -72,14 +73,21 @@ def _solve_slsqp(
 ) -> FloatArray:
     n = x0.size
     budget = {"type": "eq", "fun": lambda w: np.sum(w) - 1.0, "jac": lambda w: np.ones_like(w)}
+
+    def timed_objective(w: FloatArray) -> float:
+        check_time_budget()
+        return objective(w)
+
     result = minimize(
-        objective,
+        timed_objective,
         x0,
         jac=gradient,
         method="SLSQP",
         bounds=[(min_weight, max_weight)] * n,
         constraints=[budget, *extra_constraints],
-        options={"ftol": 1e-14, "maxiter": 2000},
+        # 1e-12 is near the attainable float precision here; tighter tolerances make SLSQP stall
+        # at the iteration limit on larger problems (100+ assets) without improving the weights.
+        options={"ftol": 1e-12, "maxiter": 2000},
     )
     if not result.success:
         raise ConvergenceError(f"the optimizer did not converge: {result.message}")
@@ -197,8 +205,12 @@ def risk_parity(market: MarketInputs) -> FloatArray:
     scaled = covariance * _scale(covariance)
     budget = 1 / n
 
+    def objective(y: FloatArray) -> float:
+        check_time_budget()
+        return 0.5 * float(y @ scaled @ y) - budget * float(np.sum(np.log(y)))
+
     result = minimize(
-        lambda y: 0.5 * float(y @ scaled @ y) - budget * float(np.sum(np.log(y))),
+        objective,
         1 / np.sqrt(np.diag(scaled)),
         jac=lambda y: scaled @ y - budget / y,
         method="L-BFGS-B",

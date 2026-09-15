@@ -15,6 +15,7 @@ from app.services.technical.common import (
     require_length,
     require_period,
     rolling_mean_optional,
+    rolling_reduce,
     seeded_ema,
     windows,
 )
@@ -140,9 +141,12 @@ def cci(
     require_period(period)
     bar = as_ohlc(high, low, close)
     require_length(bar.close.size, period, f"CCI({period})")
-    tp_windows = windows(bar.typical_price, period)
-    means = tp_windows.mean(axis=1)
-    deviations = np.abs(tp_windows - means[:, None]).mean(axis=1)
+    means = windows(bar.typical_price, period).mean(axis=1)
+    deviations = rolling_reduce(
+        bar.typical_price,
+        period,
+        lambda rows: np.abs(rows - rows.mean(axis=1, keepdims=True)).mean(axis=1),
+    )
     latest = bar.typical_price[period - 1 :]
     values = [
         None if md == 0 else float((tp - m) / (0.015 * md))

@@ -14,7 +14,8 @@ from pydantic import BaseModel, ValidationError
 
 from app.api.endpoint_specs import CalculationEndpoint, MetricEndpoint, enforce_series_limit
 from app.core.config import current_settings
-from app.core.exceptions import AppError, InvalidInputError
+from app.core.exceptions import AppError, CalculationTimeoutError, InvalidInputError
+from app.core.time_budget import check_time_budget
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,6 +67,7 @@ class ModelRegistry:
     def evaluate(self, model_id: str, inputs: Mapping[str, Any], output: str) -> Evaluation:
         """Run one registered calculation and extract a numeric output (errors are captured)."""
         model = self.get(model_id)
+        check_time_budget()
         try:
             payload = model.request_model.model_validate(inputs)
             enforce_series_limit(payload, current_settings().max_series_length)
@@ -74,6 +76,8 @@ class ModelRegistry:
             first = exc.errors()[0]
             location = ".".join(str(part) for part in first.get("loc", ()))
             return Evaluation(None, "VALIDATION_ERROR", f"{location}: {first.get('msg')}")
+        except CalculationTimeoutError:
+            raise  # the budget covers the whole request, not a single evaluation
         except AppError as exc:
             return Evaluation(None, exc.code, exc.message)
         return Evaluation(extract_number(response.model_dump(), output))

@@ -26,9 +26,10 @@ JARVIS ──HTTP/REST──▶ Investment Calculation API (FastAPI)
 HTTP request
   → RequestContextMiddleware (request id, access log, timing)
   → CORS (only when CORS_ORIGINS is set)
-  → Router /api/v1/...          (thin: no math)
+  → BodySizeLimitMiddleware     (413 above MAX_REQUEST_BODY_BYTES)
+  → Router /api/v1/...          (thin: no math; optional API key)
   → Pydantic request schema     (validation)
-  → Service                     (pure functions: numbers in, numbers out)
+  → Service                     (pure functions: numbers in, numbers out; time budget)
   → Pydantic response model
   → HTTP response
        ↘ domain exceptions → error handlers → {"error": {...}}
@@ -44,7 +45,9 @@ investment-calculation-api/
 ├── src/app/
 │   ├── main.py              # create_app() factory + ASGI `app`
 │   ├── __main__.py          # `python -m app` (host/port from env)
-│   ├── core/                # config, exceptions, error handlers, logging, middleware, security
+│   ├── core/                # config, exceptions, error handlers, logging, middleware, security,
+│   │                        # time_budget
+│   ├── api/model_registry.py   # calculations reusable by sensitivity / scenario analysis
 │   ├── api/
 │   │   ├── health.py        # GET /health
 │   │   ├── endpoint_specs.py   # declarative MetricEndpoint / CalculationEndpoint registration
@@ -133,10 +136,37 @@ All configuration comes from environment variables (or a local `.env`, which is 
 | `APP_PORT` | `8000` | Bind port for `python -m app` / Docker |
 | `CORS_ORIGINS` | *(empty)* | Comma-separated origins. Empty disables CORS. `*` is rejected when `APP_ENV=production` |
 | `LOG_LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL` |
-| `API_KEY` | *(empty)* | When set, `/api/*` requests must send `X-API-Key`. Empty keeps auth disabled |
+| `API_KEY` | *(empty)* | When set, `/api/*` requests must send `X-API-Key`. Empty keeps auth disabled. `/health`, `/docs`, `/redoc` and `/openapi.json` stay public |
 | `HOST_PORT` | `8000` | Docker Compose only: host port mapped to the container |
-| `MAX_SERIES_LENGTH` | `100000` | Max observations accepted in a series |
+| `MAX_SERIES_LENGTH` | `100000` | Max items in any list of a request (series, cash flows, ...) |
 | `MAX_MONTE_CARLO_CELLS` | `10000000` | Max `simulations × periods` for Monte Carlo |
+| `MAX_CALCULATION_SECONDS` | `30` | Time limit per calculation; longer requests return `400 LIMIT_EXCEEDED` |
+| `MAX_REQUEST_BODY_BYTES` | `10485760` | Max request body (10 MiB); larger bodies return `413 PAYLOAD_TOO_LARGE` |
+
+**When settings are read.** `app.main` builds the application at import time
+(`app = create_app()`, needed by `uvicorn app.main:app`), so the environment and `.env` in the
+**current working directory** are read once, when the module is imported. Changing them requires
+a restart. Real environment variables take precedence over `.env`. Code that needs a different
+configuration (tests, embedding) calls `create_app(Settings(...))` instead.
+
+### Safety limits
+
+The service is stateless and CPU-bound, so every request is bounded:
+
+| Limit | Value | Response |
+|---|---|---|
+| Request body | `MAX_REQUEST_BODY_BYTES` (10 MiB), checked before and while the body is read | `413 PAYLOAD_TOO_LARGE` |
+| Items per list | `MAX_SERIES_LENGTH` | `400 LIMIT_EXCEEDED` |
+| Calculation time | `MAX_CALCULATION_SECONDS`, checked between optimizer iterations, simulation batches and scenario evaluations | `400 LIMIT_EXCEEDED` |
+| Assets per portfolio | 500 (weights, covariance rows/columns, returns columns) | `422 VALIDATION_ERROR` |
+| Monte Carlo | `simulations × periods ≤ MAX_MONTE_CARLO_CELLS` | `400 LIMIT_EXCEEDED` |
+| Sensitivity grid | 2,500 points | `400 LIMIT_EXCEEDED` |
+| Technical look-back periods | 1,000 | `422 VALIDATION_ERROR` |
+
+Rolling-window indicators process windows in chunks, so memory stays in the tens of MB even at
+100,000 prices with a 1,000-period window. Measured worst cases: minimum variance and risk parity
+take well under a second at 500 assets; maximum Sharpe takes ≈1–3 s at 200–250 assets and ≈45 s at
+500 (so it hits the default time limit); the efficient frontier depends on the data.
 
 ---
 
@@ -677,6 +707,8 @@ Input conventions specific to this domain:
   matrix (rows = periods, columns = assets), which is annualized: `μ = mean × ppy`,
   `Σ = sample covariance × ppy`.
 - `asset_names` are optional labels (default `asset_1`, `asset_2`, ...).
+- Up to 500 assets. Large optimizations can exceed `MAX_CALCULATION_SECONDS`
+  (see [Safety limits](#safety-limits)).
 - Optimizations use `min_weight` / `max_weight` per asset (default long-only 0 to 1); infeasible
   bounds return `INVALID_INPUT`. Minimum variance, maximum Sharpe and the efficient frontier are
   solved with SLSQP; risk parity uses a convex log-barrier formulation and verifies equal risk
@@ -922,10 +954,13 @@ Every error uses one envelope, and stack traces are never exposed:
 
 | HTTP | `code` | When |
 |---|---|---|
-| 400 | `DIVISION_BY_ZERO`, `INVALID_INPUT`, `INSUFFICIENT_DATA`, `CONVERGENCE_ERROR`, `NON_FINITE_RESULT`, `LIMIT_EXCEEDED`, `MALFORMED_REQUEST` | Data invalid for the calculation, or body is not valid JSON |
+| 400 | `DIVISION_BY_ZERO`, `INVALID_INPUT`, `INSUFFICIENT_DATA`, `CONVERGENCE_ERROR`, `NON_FINITE_RESULT` | Data invalid for the calculation |
+| 400 | `LIMIT_EXCEEDED` | A [safety limit](#safety-limits) was exceeded (list length, grid, simulation cells, time) |
+| 400 | `MALFORMED_REQUEST` | Body is not valid JSON or cannot be parsed |
 | 401 | `UNAUTHORIZED` | Missing/invalid `X-API-Key` (only when `API_KEY` is set) |
 | 404 | `NOT_FOUND` | Unknown endpoint |
 | 405 | `METHOD_NOT_ALLOWED` | Wrong HTTP method |
+| 413 | `PAYLOAD_TOO_LARGE` | Body larger than `MAX_REQUEST_BODY_BYTES` |
 | 422 | `VALIDATION_ERROR` | Schema validation failed; `details` lists `{field, message, type}` |
 | 500 | `INTERNAL_ERROR` | Unexpected error; details go only to the server log |
 
@@ -946,7 +981,7 @@ Unhandled exceptions are logged with their traceback, server-side only.
 uv run pytest            # full suite
 uv run ruff check .      # lint
 uv run ruff format .     # format
-pyright                  # type check (npm install -g pyright)
+uvx pyright              # type check
 ```
 
 Warnings are treated as errors in the test suite. `TestClient` uses `httpx2`, the drop-in
@@ -980,3 +1015,8 @@ successor of `httpx` required by Starlette 1.x.
 - float64 arithmetic (no `Decimal`): suitable for analytics, not for accounting ledgers.
 - No market data, no persistence, no recommendations — by design.
 - Authentication is a single optional shared API key; no users, roles or rate limiting yet.
+  Concurrency is bounded only by the server's thread pool: put a gateway or rate limiter in front
+  when exposed beyond JARVIS.
+- The time limit is cooperative: it is checked between iterations, so one step (e.g. a single
+  optimizer iteration) can run slightly past it; purely vectorized calculations are bounded by the
+  input limits instead.

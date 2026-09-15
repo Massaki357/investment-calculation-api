@@ -1,8 +1,11 @@
 import pytest
 
-from app.api.model_registry import extract_number, with_overrides
+from app.api.model_registry import ModelRegistry, extract_number, with_overrides
+from app.api.v1.routes import scenarios
 from app.api.v1.routes.scenarios import registry
-from app.core.exceptions import InvalidInputError
+from app.core import time_budget as time_budget_module
+from app.core.exceptions import CalculationTimeoutError, InvalidInputError
+from app.core.time_budget import time_budget
 from app.services.scenarios import analysis
 
 
@@ -120,6 +123,27 @@ class TestRegistryHelpers:
         )
         assert evaluation.error_code == "VALIDATION_ERROR"
         assert "share_price" in (evaluation.error_message or "")
+
+    def test_evaluate_propagates_timeouts_raised_inside_the_calculation(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        local = ModelRegistry()
+        local.register_domain("scenarios", scenarios.CALCULATION_ENDPOINTS)
+        inputs = {
+            "initial_value": 100,
+            "expected_return": 0.1,
+            "volatility": 0.2,
+            "periods": 10,
+            "simulations": 10,
+            "seed": 1,
+        }
+        # Budget opened at t=0 (deadline 5), evaluate's own check at t=1 passes, and the
+        # simulation's check at t=10 fails: the timeout must not become a per-cell error.
+        ticks = iter([0.0, 1.0])
+        monkeypatch.setattr(time_budget_module.time, "monotonic", lambda: next(ticks, 10.0))
+
+        with time_budget(5), pytest.raises(CalculationTimeoutError):
+            local.evaluate("scenarios/monte-carlo", inputs, "probability_of_loss")
 
     def test_unknown_model(self) -> None:
         with pytest.raises(InvalidInputError, match="unknown model"):

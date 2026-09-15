@@ -1,12 +1,14 @@
-"""Request-id propagation and structured access logging (pure ASGI middleware)."""
+"""Request-id propagation, structured access logging and body size limit (pure ASGI middleware)."""
 
 import re
 import time
 import uuid
 
-from starlette.datastructures import MutableHeaders
+from starlette.datastructures import Headers, MutableHeaders
+from starlette.exceptions import HTTPException
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from app.core.error_handlers import error_response
 from app.core.logging import get_logger
 
 REQUEST_ID_HEADER = "X-Request-ID"
@@ -69,3 +71,43 @@ class RequestContextMiddleware:
                     "duration_ms": round(duration_ms, 3),
                 },
             )
+
+
+class BodySizeLimitMiddleware:
+    """Rejects request bodies larger than `max_bytes` with 413 PAYLOAD_TOO_LARGE.
+
+    A declared Content-Length above the limit is rejected before anything is read. Bodies without
+    it (chunked) are counted while streamed, and reading stops as soon as the limit is crossed.
+    """
+
+    def __init__(self, app: ASGIApp, max_bytes: int) -> None:
+        self.app = app
+        self.max_bytes = max_bytes
+
+    def _message(self) -> str:
+        return f"Request body exceeds the limit of {self.max_bytes} bytes"
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        content_length = Headers(scope=scope).get("content-length", "")
+        if content_length.isdigit() and int(content_length) > self.max_bytes:
+            response = error_response(413, "PAYLOAD_TOO_LARGE", self._message())
+            await response(scope, receive, send)
+            return
+
+        received = 0
+
+        async def limited_receive() -> Message:
+            nonlocal received
+            message = await receive()
+            if message["type"] == "http.request":
+                received += len(message.get("body", b""))
+                if received > self.max_bytes:
+                    # Raised inside the body read, so FastAPI routes it to the 413 error handler.
+                    raise HTTPException(status_code=413, detail=self._message())
+            return message
+
+        await self.app(scope, limited_receive, send)

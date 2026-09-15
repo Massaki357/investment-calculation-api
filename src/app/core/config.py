@@ -55,6 +55,8 @@ class Settings(BaseSettings):
 
     max_series_length: int = Field(default=100_000, ge=1)
     max_monte_carlo_cells: int = Field(default=10_000_000, ge=1)
+    max_calculation_seconds: float = Field(default=30.0, gt=0)
+    max_request_body_bytes: int = Field(default=10_485_760, ge=1)
 
     @field_validator("log_level", mode="before")
     @classmethod

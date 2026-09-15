@@ -67,3 +67,7 @@ class LimitExceededError(CalculationError):
     """The request exceeds a configured safety limit."""
 
     code = "LIMIT_EXCEEDED"
+
+
+class CalculationTimeoutError(LimitExceededError):
+    """The calculation ran longer than the configured time limit (aborts the whole request)."""

@@ -60,6 +60,24 @@ def test_wildcard_cors_is_allowed_outside_production() -> None:
     assert _settings(app_env="development", cors_origins="*").cors_origins == ["*"]
 
 
+def test_safety_limits_defaults_and_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    defaults = _settings()
+    assert defaults.max_request_body_bytes == 10_485_760
+    assert defaults.max_calculation_seconds == 30
+
+    monkeypatch.setenv("MAX_REQUEST_BODY_BYTES", "2048")
+    monkeypatch.setenv("MAX_CALCULATION_SECONDS", "2.5")
+    settings = _settings()
+    assert settings.max_request_body_bytes == 2048
+    assert settings.max_calculation_seconds == 2.5
+
+
+@pytest.mark.parametrize("field", ["max_request_body_bytes", "max_calculation_seconds"])
+def test_safety_limits_must_be_positive(field: str) -> None:
+    with pytest.raises(ValidationError):
+        _settings(**{field: 0})
+
+
 def test_invalid_port_is_rejected() -> None:
     with pytest.raises(ValidationError):
         _settings(app_port=70000)
