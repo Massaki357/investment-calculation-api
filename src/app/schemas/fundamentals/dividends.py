@@ -2,12 +2,11 @@ from typing import Annotated
 
 from pydantic import Field
 
+from app.schemas.fields import SharePrice, SharesOutstanding
 from app.schemas.fundamentals.common import (
     EarningsPerShare,
     FundamentalsRequest,
     NetIncome,
-    SharePrice,
-    SharesOutstanding,
 )
 
 DividendPerShare = Annotated[

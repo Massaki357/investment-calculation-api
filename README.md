@@ -11,7 +11,8 @@ It is consumed by JARVIS (the main AI system) over HTTP/REST. This service:
 - does **not** issue buy/sell/hold recommendations or opinions;
 - does **not** access JARVIS's code, database or API.
 
-> **Status:** Phase 2 complete — API foundation + Fundamental Analysis (59 endpoints).
+> **Status:** Phase 3 complete — API foundation, Fundamental Analysis (59 endpoints) and
+> Valuation (21 endpoints).
 > See [Roadmap](#roadmap).
 
 ---
@@ -45,10 +46,10 @@ investment-calculation-api/
 │   ├── core/                # config, exceptions, error handlers, logging, middleware, security
 │   ├── api/
 │   │   ├── health.py        # GET /health
-│   │   ├── metric_endpoint.py  # declarative registration of single-value metric endpoints
+│   │   ├── endpoint_specs.py   # declarative MetricEndpoint / CalculationEndpoint registration
 │   │   └── v1/
 │   │       ├── router.py    # aggregates domain routers under /api/v1
-│   │       └── routes/fundamentals/  # one module per group (multiples, profitability, ...)
+│   │       └── routes/<domain>/      # one module per group (multiples, dcf, ddm, ...)
 │   ├── schemas/             # common.py + one package per domain (request/response models)
 │   ├── services/            # pure calculation functions per domain
 │   └── utils/               # safe_divide, ensure_finite, length guards
@@ -64,17 +65,18 @@ Design rules:
 - **Versioned by package.** `/api/v2` will be a sibling package; v1 stays untouched.
 - **Sync endpoints (`def`).** Calculations are CPU-bound; FastAPI runs them in a threadpool.
 
-### Adding a single-value calculation
+### Adding a calculation
 
 1. Write a pure function in `services/<domain>/` (raise `CalculationError` subclasses on invalid math).
 2. Add its request model in `schemas/<domain>/` (reuse the documented field types).
-3. Declare a `MetricEndpoint` (path, metric, unit, formula, notes, example, compute) in
-   `api/v1/routes/<domain>/`. Docs, request/response examples and error responses are generated,
-   and the example is executed at import time so documentation cannot drift from the code.
+3. Declare a `MetricEndpoint` (single value) or a `CalculationEndpoint` (structured response
+   model) in `api/v1/routes/<domain>/`. Docs, request/response examples and error responses
+   are generated, and every example is executed at import time so documentation cannot drift
+   from the code.
 4. Add unit tests for the formula and a normal/edge/invalid case to the API test table — a guard
    test fails if an endpoint has no cases.
 
-Structured results (e.g. DuPont) use an explicit route with their own response model.
+Shared, documented field types live in `schemas/fields.py`.
 
 ---
 
@@ -146,7 +148,8 @@ All configuration comes from environment variables (or a local `.env`, which is 
 
 Calculation endpoints follow `POST /api/v1/{domain}/{metric}` (kebab-case). Every one documents
 its formula, unit, assumptions, a request example, a response example and its error responses in
-`/docs`.
+`/docs`. Response examples in `/docs` omit `null` fields (FastAPI strips them from the OpenAPI
+document); live responses always include every field of the response model.
 
 ### Examples
 
@@ -339,6 +342,111 @@ Input conventions specific to this domain:
 | `POST /api/v1/fundamentals/dividend-per-share` | Dividend per Share | `DPS = total_dividends / shares_outstanding` | `amount` |
 | `POST /api/v1/fundamentals/yield-on-cost` | Yield on Cost | `Yield on Cost = dividend_per_share / average_cost_per_share` | `decimal` |
 
+### Valuation
+
+Input conventions specific to this domain:
+
+- Rates are decimals **per period** and must be greater than −1.
+- Cash flow *i* occurs at the **end of period i**; `mid_year_convention: true` discounts it at
+  *i − 0.5*. The **terminal value is always discounted from the end of the last period**.
+- Perpetuity growth requires `discount_rate > growth_rate` (otherwise `INVALID_INPUT`).
+- Full DCF endpoints accept `terminal` as a tagged object:
+  `{"method": "perpetuity_growth", "growth_rate": 0.02}` or
+  `{"method": "exit_multiple", "terminal_metric": 250, "multiple": 8}`.
+- `terminal_value_percentage = PV(terminal value) / total value`; `value_per_share` needs
+  `shares_outstanding`; `margin_of_safety` also needs `share_price` and is `null` when the value
+  per share is ≤ 0. Standalone `/margin-of-safety` requires `intrinsic_value > 0`.
+- Equity bridge: `equity = EV − net_debt − minority_interest + non_operating_assets`.
+- Beta relevering uses Hamada (debt beta = 0). WACC weights must be market values.
+- Three-stage DDM: growth declines linearly during the transition and reaches the stable rate
+  in its last year (Damodaran). `stable_cost_of_equity` only affects the terminal price.
+
+FCFF DCF example:
+
+```bash
+curl -X POST http://localhost:8000/api/v1/valuation/dcf/fcff \
+  -H "Content-Type: application/json" \
+  -d '{"cash_flows": [100, 110, 121], "discount_rate": 0.10,
+       "terminal": {"method": "perpetuity_growth", "growth_rate": 0.02},
+       "net_debt": 300, "shares_outstanding": 100, "share_price": 9}'
+```
+
+```json
+{
+  "metric": "DCF (FCFF)",
+  "enterprise_value": 1431.8181818181815,
+  "equity_value": 1131.8181818181815,
+  "terminal_value": 1542.75,
+  "terminal_value_percentage": 0.8095238095238094,
+  "value_per_share": 11.318181818181815,
+  "margin_of_safety": 0.2048192771084335,
+  "present_value_of_cash_flows": 272.7272727272727,
+  "present_value_of_terminal_value": 1159.0909090909088,
+  "discounted_cash_flows": [
+    {"period": 1.0, "cash_flow": 100.0, "discount_factor": 0.9090909090909091, "present_value": 90.9090909090909},
+    "..."
+  ],
+  "currency": null
+}
+```
+
+WACC example:
+
+```bash
+curl -X POST http://localhost:8000/api/v1/valuation/wacc \
+  -H "Content-Type: application/json" \
+  -d '{"equity_value": 600, "debt_value": 400, "cost_of_equity": 0.12,
+       "pre_tax_cost_of_debt": 0.08, "tax_rate": 0.34}'
+```
+
+```json
+{
+  "metric": "WACC", "value": 0.09312, "unit": "decimal", "currency": null,
+  "components": [
+    {"metric": "Equity Weight", "value": 0.6, "unit": "decimal"},
+    {"metric": "Debt Weight", "value": 0.4, "unit": "decimal"},
+    {"metric": "Cost of Equity", "value": 0.12, "unit": "decimal"},
+    {"metric": "After-tax Cost of Debt", "value": 0.05279999999999999, "unit": "decimal"}
+  ]
+}
+```
+
+##### DCF and time value
+
+| Endpoint | Result | Formula | Unit |
+|---|---|---|---|
+| `POST /api/v1/valuation/future-value` | Future Value | `FV = present_value × (1 + rate) ^ periods` | `amount` |
+| `POST /api/v1/valuation/terminal-value/perpetuity-growth` | Terminal Value (Perpetuity Growth) | `TV = final_cash_flow × (1 + growth_rate) / (discount_rate − growth_rate)` | `amount` |
+| `POST /api/v1/valuation/terminal-value/exit-multiple` | Terminal Value (Exit Multiple) | `TV = terminal_metric × multiple` | `amount` |
+| `POST /api/v1/valuation/enterprise-value` | Enterprise Value | `EV = present_value_of_cash_flows + present_value_of_terminal_value` | `amount` |
+| `POST /api/v1/valuation/equity-value` | Equity Value | `Equity = enterprise_value − net_debt − minority_interest + non_operating_assets` | `amount` |
+| `POST /api/v1/valuation/value-per-share` | Intrinsic Value per Share | `Value per Share = equity_value / shares_outstanding` | `amount` |
+| `POST /api/v1/valuation/margin-of-safety` | Margin of Safety | `MoS = (intrinsic_value − market_price) / intrinsic_value` | `decimal` |
+| `POST /api/v1/valuation/present-value` | Present Value | `PV = Σ CF_i / (1 + discount_rate) ^ t_i` | structured |
+| `POST /api/v1/valuation/dcf/fcff` | DCF (FCFF) | `EV = Σ FCFF_t / (1 + WACC)^t + TV / (1 + WACC)^n` | structured |
+| `POST /api/v1/valuation/dcf/fcfe` | DCF (FCFE) | `Equity = Σ FCFE_t / (1 + Ke)^t + TV / (1 + Ke)^n` | structured |
+
+##### Dividend discount models
+
+| Endpoint | Result | Formula | Unit |
+|---|---|---|---|
+| `POST /api/v1/valuation/ddm` | Dividend Discount Model | `Value = Σ D_t / (1 + cost_of_equity)^t + terminal_price / (1 + cost_of_equity)^n` | `amount` |
+| `POST /api/v1/valuation/gordon-growth` | Gordon Growth Model | `P0 = D1 / (cost_of_equity − growth_rate), with D1 = D0 × (1 + growth_rate)` | `amount` |
+| `POST /api/v1/valuation/ddm/two-stage` | Two-Stage DDM | `D_t = D0 × (1 + high_growth_rate)^t, t = 1..n` | structured |
+| `POST /api/v1/valuation/ddm/three-stage` | Three-Stage DDM | `High growth: D_t = D_{t−1} × (1 + g1), t = 1..n` | structured |
+
+##### Cost of capital
+
+| Endpoint | Result | Formula | Unit |
+|---|---|---|---|
+| `POST /api/v1/valuation/capm` | CAPM Expected Return | `E(R) = risk_free_rate + beta × market_risk_premium` | `decimal` |
+| `POST /api/v1/valuation/levered-beta` | Levered Beta | `βL = βU × [1 + (1 − tax_rate) × debt_to_equity]` | `number` |
+| `POST /api/v1/valuation/unlevered-beta` | Unlevered Beta | `βU = βL / [1 + (1 − tax_rate) × debt_to_equity]` | `number` |
+| `POST /api/v1/valuation/cost-of-equity` | Cost of Equity | `Ke = risk_free_rate + beta × market_risk_premium + country_risk_premium + size_premium + specific_risk_premium` | `decimal` |
+| `POST /api/v1/valuation/cost-of-debt` | Cost of Debt | `risk_free_plus_spread: Kd = risk_free_rate + credit_spread · interest_over_debt: Kd = interest_expense / total_debt` | `decimal` |
+| `POST /api/v1/valuation/after-tax-cost-of-debt` | After-tax Cost of Debt | `Kd after tax = pre_tax_cost_of_debt × (1 − tax_rate)` | `decimal` |
+| `POST /api/v1/valuation/wacc` | WACC | `WACC = E / (D + E) × cost_of_equity + D / (D + E) × pre_tax_cost_of_debt × (1 − tax_rate)` | structured |
+
 ---
 
 ## Conventions
@@ -442,7 +550,7 @@ successor of `httpx` required by Starlette 1.x.
 |---|---|---|
 | 1 | API foundation: config, health, errors, logging, schemas, Docker, tests | ✅ |
 | 2 | Fundamental Analysis (59 endpoints) | ✅ |
-| 3 | Valuation | pending |
+| 3 | Valuation (21 endpoints) | ✅ |
 | 4 | Fixed Income | pending |
 | 5 | Risk + Statistics | pending |
 | 6 | Portfolio | pending |

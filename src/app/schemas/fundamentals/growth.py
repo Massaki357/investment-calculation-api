@@ -1,5 +1,6 @@
 from pydantic import Field
 
+from app.schemas.fields import TaxRate
 from app.schemas.fundamentals.common import (
     CapitalExpenditures,
     ChangeInWorkingCapital,
@@ -7,7 +8,6 @@ from app.schemas.fundamentals.common import (
     Ebit,
     FundamentalsRequest,
     NetIncome,
-    TaxRate,
 )
 
 

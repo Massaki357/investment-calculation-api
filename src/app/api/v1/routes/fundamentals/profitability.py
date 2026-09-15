@@ -1,14 +1,19 @@
-from typing import Annotated, cast
+from typing import cast
 
-from fastapi import APIRouter, Body
+from fastapi import APIRouter
 
-from app.api.metric_endpoint import MetricEndpoint, add_metric_endpoints
+from app.api.endpoint_specs import (
+    CalculationEndpoint,
+    MetricEndpoint,
+    add_calculation_endpoints,
+    add_metric_endpoints,
+)
 from app.api.v1.routes.fundamentals.common import (
     AVERAGE_BALANCE_NOTE,
     SIGNED_RESULT_NOTE,
     resolve_balance,
 )
-from app.schemas.common import MetricValue, Unit, error_responses
+from app.schemas.common import MetricValue, Unit
 from app.schemas.fundamentals import profitability as schemas
 from app.schemas.fundamentals.profitability import DuPontMethod, DuPontRequest, DuPontResponse
 from app.services.fundamentals import profitability as calc
@@ -153,63 +158,7 @@ ENDPOINTS = (
 add_metric_endpoints(router, ENDPOINTS)
 
 
-DUPONT_EXAMPLE = {
-    "method": "three_factor",
-    "net_income": 120.0,
-    "revenue": 1000.0,
-    "total_assets": 2000.0,
-    "shareholders_equity": 800.0,
-}
-DUPONT_FIVE_FACTOR_EXAMPLE = {
-    "method": "five_factor",
-    "net_income": 120.0,
-    "pretax_income": 160.0,
-    "ebit": 200.0,
-    "revenue": 1000.0,
-    "total_assets": 2000.0,
-    "shareholders_equity": 800.0,
-}
-
-
-@router.post(
-    "/dupont",
-    name="dupont",
-    summary="DuPont Analysis",
-    response_model=DuPontResponse,
-    responses=error_responses(),
-    description="""DuPont decomposition of return on equity.
-
-**three_factor (default):**
-`ROE = (net_income / revenue) × (revenue / total_assets) × (total_assets / shareholders_equity)`
-
-**five_factor:**
-`ROE = (net_income / pretax_income) × (pretax_income / ebit) × (ebit / revenue)
-× (revenue / total_assets) × (total_assets / shareholders_equity)`
-
-**Unit:** every component and `return_on_equity` are returned in full precision;
-margins, burdens and ROE are `decimal`, turnover and equity multiplier are `multiple`.
-
-**Assumptions and notes:**
-- """
-    + AVERAGE_BALANCE_NOTE
-    + """
-- ROE is the product of the components, so it equals net_income / shareholders_equity
-  when the same balances are used.""",
-)
-def dupont(
-    payload: Annotated[
-        DuPontRequest,
-        Body(
-            openapi_examples={
-                "three_factor": {"summary": "Three-factor DuPont", "value": DUPONT_EXAMPLE},
-                "five_factor": {
-                    "summary": "Five-factor DuPont",
-                    "value": DUPONT_FIVE_FACTOR_EXAMPLE,
-                },
-            }
-        ),
-    ],
-) -> DuPontResponse:
+def _dupont(payload: DuPontRequest) -> DuPontResponse:
     assets = resolve_balance(payload.total_assets)
     equity = resolve_balance(payload.shareholders_equity)
 
@@ -246,3 +195,47 @@ def dupont(
         ]
 
     return DuPontResponse(method=payload.method, return_on_equity=roe, components=components)
+
+
+STRUCTURED_ENDPOINTS = (
+    CalculationEndpoint(
+        path="/dupont",
+        title="DuPont Analysis",
+        summary="DuPont decomposition of return on equity",
+        formulas=(
+            "three_factor (default): ROE = (net_income / revenue) × (revenue / total_assets) "
+            "× (total_assets / shareholders_equity)",
+            "five_factor: ROE = (net_income / pretax_income) × (pretax_income / ebit) "
+            "× (ebit / revenue) × (revenue / total_assets) × (total_assets / shareholders_equity)",
+        ),
+        request_model=DuPontRequest,
+        response_model=DuPontResponse,
+        compute=_dupont,
+        examples={
+            "three_factor": {
+                "method": "three_factor",
+                "net_income": 120.0,
+                "revenue": 1000.0,
+                "total_assets": 2000.0,
+                "shareholders_equity": 800.0,
+            },
+            "five_factor": {
+                "method": "five_factor",
+                "net_income": 120.0,
+                "pretax_income": 160.0,
+                "ebit": 200.0,
+                "revenue": 1000.0,
+                "total_assets": 2000.0,
+                "shareholders_equity": 800.0,
+            },
+        },
+        notes=(
+            "Margins, burdens and ROE are decimals; turnover and equity multiplier are multiples.",
+            AVERAGE_BALANCE_NOTE,
+            "ROE is the product of the components, so it equals net_income / shareholders_equity "
+            "when the same balances are used.",
+        ),
+    ),
+)
+
+add_calculation_endpoints(router, STRUCTURED_ENDPOINTS)

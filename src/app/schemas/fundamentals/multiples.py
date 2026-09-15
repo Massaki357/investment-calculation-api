@@ -3,6 +3,7 @@ from typing import Self
 
 from pydantic import Field, model_validator
 
+from app.schemas.fields import SharePrice
 from app.schemas.fundamentals.common import (
     BookValuePerShare,
     EarningsPerShare,
@@ -14,7 +15,6 @@ from app.schemas.fundamentals.common import (
     GrowthRateDecimal,
     MarketCapitalization,
     Revenue,
-    SharePrice,
 )
 
 

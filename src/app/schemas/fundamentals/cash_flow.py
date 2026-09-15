@@ -1,5 +1,6 @@
 from pydantic import Field
 
+from app.schemas.fields import SharesOutstanding, TaxRate
 from app.schemas.fundamentals.common import (
     CapitalExpenditures,
     ChangeInWorkingCapital,
@@ -11,8 +12,6 @@ from app.schemas.fundamentals.common import (
     NetIncome,
     OperatingCashFlow,
     Revenue,
-    SharesOutstanding,
-    TaxRate,
 )
 
 

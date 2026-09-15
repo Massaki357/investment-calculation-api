@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from app.api.metric_endpoint import MetricEndpoint, add_metric_endpoints
+from app.api.endpoint_specs import MetricEndpoint, add_metric_endpoints
 from app.schemas.common import Unit
 from app.schemas.fundamentals import growth as schemas
 from app.services.fundamentals import growth as calc

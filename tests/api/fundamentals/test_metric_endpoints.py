@@ -547,7 +547,9 @@ def test_documented_example_matches_live_response(
     example_request = operation["requestBody"]["content"]["application/json"]["examples"][
         "example"
     ]["value"]
-    example_response = operation["responses"]["200"]["content"]["application/json"]["example"]
+    example_response = operation["responses"]["200"]["content"]["application/json"]["examples"][
+        "example"
+    ]["value"]
 
     live = client.post(BASE + path, json=example_request).json()
 

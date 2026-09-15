@@ -1,10 +1,7 @@
 """Reusable, documented field types for fundamentals requests.
 
-Validation rule of thumb:
-- Constraints on a single field that always hold (price > 0, tax rate in [0, 1], magnitudes ≥ 0)
-  are enforced here and produce HTTP 422.
-- Formula-specific or cross-field conditions (zero denominators, CAGR with non-positive values)
-  are enforced by services and produce HTTP 400.
+Cross-domain field types (tax rate, share price, shares...) live in app.schemas.fields,
+which also documents where validation happens (schema -> 422, service -> 400).
 """
 
 from typing import Annotated
@@ -40,7 +37,6 @@ InvestedCapitalBalance = Annotated[
 ]
 
 # --- Market data supplied by the caller ---
-SharePrice = Annotated[float, Field(gt=0, description="Price per share (amount, > 0).")]
 MarketCapitalization = Annotated[
     float, Field(gt=0, description="Market capitalization: price × shares outstanding (> 0).")
 ]
@@ -48,7 +44,6 @@ EnterpriseValue = Annotated[
     float,
     Field(description="Enterprise value: market cap + net debt (+ minorities). Can be negative."),
 ]
-SharesOutstanding = Annotated[float, Field(gt=0, description="Number of shares outstanding (> 0).")]
 
 # --- Income statement ---
 Revenue = Annotated[float, Field(description="Net revenue for the period.")]
@@ -63,10 +58,6 @@ EarningsPerShare = Annotated[
 BookValuePerShare = Annotated[float, Field(description="Book value (equity) per share.")]
 InterestExpense = Annotated[
     float, Field(ge=0, description="Interest expense as a positive magnitude (≥ 0).")
-]
-TaxRate = Annotated[
-    float,
-    Field(ge=0, le=1, description="Effective tax rate in decimal form (0.34 = 34%), in [0, 1]."),
 ]
 
 # --- Cash flow statement ---

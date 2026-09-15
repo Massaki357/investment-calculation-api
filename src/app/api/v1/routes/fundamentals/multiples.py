@@ -2,7 +2,7 @@ from typing import cast
 
 from fastapi import APIRouter
 
-from app.api.metric_endpoint import MetricEndpoint, add_metric_endpoints
+from app.api.endpoint_specs import MetricEndpoint, add_metric_endpoints
 from app.api.v1.routes.fundamentals.common import SIGNED_RESULT_NOTE
 from app.schemas.common import Unit
 from app.schemas.fundamentals import multiples as schemas

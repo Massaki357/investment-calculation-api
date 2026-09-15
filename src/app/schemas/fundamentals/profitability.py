@@ -4,6 +4,7 @@ from typing import Self
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.schemas.common import MetricValue
+from app.schemas.fields import TaxRate
 from app.schemas.fundamentals.common import (
     CashAndEquivalents,
     CurrentLiabilities,
@@ -18,7 +19,6 @@ from app.schemas.fundamentals.common import (
     PretaxIncome,
     Revenue,
     ShareholdersEquityBalance,
-    TaxRate,
     TotalAssetsBalance,
 )
 
